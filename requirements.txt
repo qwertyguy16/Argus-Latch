@@ -1,0 +1,10 @@
+Flask
+requests
+discord.py
+python-dotenv
+Flask-Limiter
+gunicorn
+waitress
+Flask-SQLAlchemy
+Pillow
+supabase==2.31.0
