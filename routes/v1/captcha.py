@@ -19,25 +19,48 @@ def generate_visual_challenge():
     
     # Random text length between 5 and 6
     text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=random.randint(5, 6)))
-    width, height = 200, 70
+    # Increase dimensions for better visibility
+    width, height = 280, 90
     img = Image.new('RGB', (width, height), color=(240, 240, 240))
     d = ImageDraw.Draw(img)
     
-    try:
-        font = ImageFont.truetype("arial.ttf", 36)
-    except IOError:
-        font = ImageFont.load_default()
+    # Try a list of standard/fallback fonts with size 44 for excellent readability
+    font = None
+    font_names = [
+        "arial.ttf",
+        "Arial.ttf",
+        "DejaVuSans.ttf",
+        "LiberationSans-Regular.ttf",
+        "Roboto-Regular.ttf",
+        "Helvetica.ttf",
+        "Georgia.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+    ]
+    for font_name in font_names:
+        try:
+            font = ImageFont.truetype(font_name, 44)
+            break
+        except IOError:
+            continue
+            
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=44)
+        except TypeError:
+            font = ImageFont.load_default()
         
     # Draw background noise first
-    for _ in range(400):
+    for _ in range(500):
         d.point((random.randint(0, width), random.randint(0, height)), fill=(random.randint(100, 200), random.randint(100, 200), random.randint(100, 200)))
         
     # Add interference curves (sine waves)
     for _ in range(4):
-        amplitude = random.randint(5, 15)
-        frequency = random.uniform(0.02, 0.08)
+        amplitude = random.randint(6, 18)
+        frequency = random.uniform(0.015, 0.06)
         phase = random.uniform(0, math.pi * 2)
-        y_offset = random.randint(20, height - 20)
+        y_offset = random.randint(25, height - 25)
         
         points = []
         for x in range(0, width, 2):
@@ -48,34 +71,35 @@ def generate_visual_challenge():
         d.line(points, fill=color, width=random.randint(1, 3))
         
     # Draw text with rotation and scaling
-    char_spacing = (width - 40) // len(text)
+    char_spacing = (width - 60) // len(text)
     for i, char in enumerate(text):
-        char_img = Image.new('RGBA', (50, 50), (255, 255, 255, 0))
+        char_img = Image.new('RGBA', (70, 70), (255, 255, 255, 0))
         char_draw = ImageDraw.Draw(char_img)
         char_color = (random.randint(0, 100), random.randint(0, 100), random.randint(0, 100), 255)
         
-        char_draw.text((10, 5), char, fill=char_color, font=font)
+        char_draw.text((15, 10), char, fill=char_color, font=font)
         
         # Rotate and slightly scale
-        angle = random.randint(-35, 35)
+        angle = random.randint(-30, 30)
         char_img = char_img.rotate(angle, expand=0, resample=Image.BICUBIC)
         
-        x = 20 + i * char_spacing + random.randint(-5, 5)
-        y = 5 + random.randint(-8, 8)
+        x = 15 + i * char_spacing + random.randint(-4, 4)
+        y = 10 + random.randint(-6, 6)
         
         img.paste(char_img, (x, y), char_img)
     
     # Add foreground noise
-    for _ in range(200):
+    for _ in range(250):
         d.point((random.randint(0, width), random.randint(0, height)), fill=(random.randint(0, 150), random.randint(0, 150), random.randint(0, 150)))
         
     # Apply a slight blur
-    img = img.filter(ImageFilter.GaussianBlur(1.0))
+    img = img.filter(ImageFilter.GaussianBlur(0.8))
     
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     return text, img_b64
+
 
 @captcha_bp.route('/api.js')
 def api_js():
