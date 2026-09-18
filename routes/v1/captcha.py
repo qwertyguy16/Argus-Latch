@@ -98,14 +98,121 @@ def generate_visual_challenge():
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    
     return text, img_b64
 
+def generate_slider_challenge():
+    import io
+    import base64
+    import random
+    from PIL import Image, ImageDraw, ImageFilter
+
+    width, height = 320, 150
+    # Generate background
+    bg_img = Image.new('RGB', (width, height), color=(random.randint(200, 255), random.randint(200, 255), random.randint(200, 255)))
+    d = ImageDraw.Draw(bg_img)
+    
+    # Draw some random shapes
+    for _ in range(20):
+        shape_type = random.choice(['rectangle', 'ellipse'])
+        x1 = random.randint(-50, width)
+        y1 = random.randint(-50, height)
+        x2 = x1 + random.randint(20, 100)
+        y2 = y1 + random.randint(20, 100)
+        color = (random.randint(100, 220), random.randint(100, 220), random.randint(100, 220))
+        if shape_type == 'rectangle':
+            d.rectangle([x1, y1, x2, y2], fill=color)
+        else:
+            d.ellipse([x1, y1, x2, y2], fill=color)
+            
+    # Add noise
+    for _ in range(1000):
+        d.point((random.randint(0, width), random.randint(0, height)), fill=(random.randint(50, 150), random.randint(50, 150), random.randint(50, 150)))
+        
+    bg_img = bg_img.filter(ImageFilter.GaussianBlur(0.5))
+
+    piece_size = 40
+    target_x = random.randint(50, width - piece_size - 10)
+    target_y = random.randint(10, height - piece_size - 10)
+
+    # Extract puzzle piece
+    piece = bg_img.crop((target_x, target_y, target_x + piece_size, target_y + piece_size))
+    
+    # Create a mask for piece (a bit rounded)
+    mask = Image.new('L', (piece_size, piece_size), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle((0, 0, piece_size, piece_size), radius=5, fill=255)
+    
+    piece.putalpha(mask)
+    
+    # Add a border to the piece
+    piece_draw = ImageDraw.Draw(piece)
+    piece_draw.rounded_rectangle((0, 0, piece_size-1, piece_size-1), radius=5, outline=(255, 255, 255, 150), width=2)
+    
+    # Draw shadow on the background at target
+    shadow = Image.new('RGBA', (piece_size, piece_size), (0, 0, 0, 120))
+    shadow_mask = Image.new('L', (piece_size, piece_size), 0)
+    ImageDraw.Draw(shadow_mask).rounded_rectangle((0, 0, piece_size, piece_size), radius=5, fill=255)
+    shadow.putalpha(shadow_mask)
+    bg_img.paste(shadow, (target_x, target_y), shadow)
+    
+    bg_buf = io.BytesIO()
+    bg_img.save(bg_buf, format='PNG')
+    bg_b64 = base64.b64encode(bg_buf.getvalue()).decode('utf-8')
+    
+    piece_buf = io.BytesIO()
+    piece.save(piece_buf, format='PNG')
+    piece_b64 = base64.b64encode(piece_buf.getvalue()).decode('utf-8')
+    
+    return bg_b64, piece_b64, target_x, target_y
+
+
+import os
+import subprocess
+import hashlib
+from flask import current_app
+
+@lru_cache(maxsize=32)
+def get_obfuscated_js(url_root, mtime):
+    raw_js = render_template('api/captcha_api.js')
+    
+    import secrets
+    unique_id = secrets.token_hex(4)
+    hash_str = hashlib.md5(f"{url_root}_{mtime}".encode()).hexdigest()
+    temp_in = os.path.join(current_app.root_path, f"temp_raw_{hash_str}_{unique_id}.js")
+    temp_out = os.path.join(current_app.root_path, f"temp_obf_{hash_str}_{unique_id}.js")
+    
+    try:
+        with open(temp_in, 'w', encoding='utf-8') as f:
+            f.write(raw_js)
+            
+        cmd = f"javascript-obfuscator {temp_in} --output {temp_out} --compact true --control-flow-flattening true --dead-code-injection true --disable-console-output true --string-array true --string-array-encoding rc4 --string-array-threshold 0.75"
+        subprocess.run(cmd, shell=True, check=True)
+        
+        with open(temp_out, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        import logging
+        logging.error(f"JS Obfuscation failed: {e}")
+        return raw_js
+    finally:
+        if os.path.exists(temp_in):
+            os.remove(temp_in)
+        if os.path.exists(temp_out):
+            os.remove(temp_out)
 
 @captcha_bp.route('/api.js')
 def api_js():
     """Serves the JavaScript for the Captcha widget."""
-    response = make_response(render_template('api/captcha_api.js'))
+    template_path = os.path.join(current_app.root_path, 'templates', 'api', 'captcha_api.js')
+    mtime = os.path.getmtime(template_path) if os.path.exists(template_path) else 0
+    
+    obfuscated_js = get_obfuscated_js(request.url_root, mtime)
+    
+    response = make_response(obfuscated_js)
     response.headers['Content-Type'] = 'application/javascript'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
     return response
 
 @captcha_bp.route('/settings', methods=['GET', 'OPTIONS'])
@@ -195,9 +302,19 @@ def challenge():
     telemetry = {}
     if telemetry_raw and isinstance(telemetry_raw, str):
         try:
-            telemetry = json.loads(base64.b64decode(telemetry_raw).decode('utf-8'))
+            # Decrypt/Deobfuscate payload
+            payload_str = base64.b64decode(telemetry_raw).decode('utf-8')
+            result = ""
+            for i, char in enumerate(payload_str):
+                key_char = site_key[i % len(site_key)]
+                result += chr(ord(char) ^ ord(key_char))
+            telemetry = json.loads(result)
         except Exception:
-            pass
+            try:
+                # Fallback for raw base64 (old clients or testing)
+                telemetry = json.loads(base64.b64decode(telemetry_raw).decode('utf-8'))
+            except Exception:
+                pass
     elif isinstance(telemetry_raw, dict):
         telemetry = telemetry_raw
     
@@ -265,6 +382,49 @@ def challenge():
         if len(set(touch_pressures)) == 1:
             risk_score += 0.1
 
+    hardware_concurrency = telemetry.get('hardwareConcurrency', 0)
+    if hardware_concurrency == 0 or hardware_concurrency > 128:
+        risk_score += 0.2
+        
+    device_memory = telemetry.get('deviceMemory', 0)
+    if device_memory == 0 or device_memory > 256:
+        risk_score += 0.2
+        
+    audio_fingerprint = telemetry.get('audioFingerprint', '')
+    if not audio_fingerprint or audio_fingerprint == "0":
+        risk_score += 0.15
+        
+    max_mouse_velocity = telemetry.get('maxMouseVelocity', 0)
+    if max_mouse_velocity > 15: # Unnatural teleportation
+        risk_score += 0.4
+        
+    click_durations = telemetry.get('clickDurations', [])
+    if click_durations:
+        avg_click = sum(click_durations) / len(click_durations)
+        if avg_click < 20: # Bot clicking instantly
+            risk_score += 0.3
+
+    pow_data = telemetry.get('pow', {})
+    if not pow_data:
+        risk_score += 1.0 # No PoW provided
+    else:
+        nonce = pow_data.get('nonce')
+        timestamp_pow = pow_data.get('timestamp')
+        hash_hex = pow_data.get('hashHex')
+        
+        if nonce is None or not timestamp_pow or not hash_hex:
+            risk_score += 1.0
+        else:
+            import time
+            if (time.time() * 1000) - timestamp_pow > 300000: # 5 minutes old
+                risk_score += 1.0
+            else:
+                import hashlib
+                msg = f"{site_key}{timestamp_pow}{nonce}".encode('utf-8')
+                expected_hash = hashlib.sha256(msg).hexdigest()
+                if expected_hash != hash_hex or not hash_hex.startswith("0000"):
+                    risk_score += 1.0
+
     # 3. Intelligence: VPN & Datacenter IP Detection
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     vpn_detected = check_ip_vpn(client_ip)
@@ -277,30 +437,37 @@ def challenge():
 
     risk_score = min(1.0, risk_score)
     if risk_score >= 0.85:
+        print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score})")
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
     # Check if Visual Challenge is required
     requires_visual = False
-    if app.strict_mode or risk_score >= 0.4:
+    if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
         requires_visual = True
         
     import hmac
     import hashlib
     
     if requires_visual:
-        text_ans, img_b64 = generate_visual_challenge()
+        bg_b64, piece_b64, target_x, target_y = generate_slider_challenge()
         timestamp = str(int(time.time()))
         challenge_string = secrets.token_hex(8)
-        payload = f"{challenge_string}:{text_ans}:{timestamp}"
+        # We store the target_x as the answer
+        payload = f"{challenge_string}:{target_x}:{timestamp}"
         vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
         visual_ticket = f"{payload}.{vis_sig}"
         return jsonify({
             "success": False,
             "requires_visual": True,
-            "image": img_b64,
+            "visual_type": "slider",
+            "bg_image": bg_b64,
+            "piece_image": piece_b64,
+            "piece_y": target_y,
             "visual_ticket": visual_ticket,
             "risk_score": risk_score
         })
+
+    print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score})")
 
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
@@ -385,6 +552,8 @@ def siteverify():
             logging.error(f"Failed to commit siteverify success: {e}")
             db.session.rollback()
             
+        print(f"[CAPTCHA] Siteverify Validation [PASS] (Risk: {risk_score})")
+            
         return jsonify({
             "success": True,
             "challenge_ts": datetime.utcnow().isoformat() + "Z",
@@ -397,10 +566,12 @@ def siteverify():
         db.session.add(app)
         try:
             db.session.commit()
-        except Exception as e:
+        except Exception as ex:
             import logging
-            logging.error(f"Failed to commit siteverify failure: {e}")
+            logging.error(f"Failed to commit siteverify failure: {ex}")
             db.session.rollback()
+            
+        print(f"[CAPTCHA] Siteverify Validation [FAIL] (Reason: {str(e)})")
             
         return jsonify({
             "success": False,
@@ -473,7 +644,16 @@ def visual_verify():
             db.session.rollback()
         return jsonify({"success": False, "error": "Invalid ticket"}), 400
         
-    if answer.strip().upper() != expected_ans.upper():
+    # Validation for slider offset
+    try:
+        submitted_x = float(answer)
+        expected_x = float(expected_ans)
+        # Tolerance of +/- 4 pixels
+        is_valid = abs(submitted_x - expected_x) <= 4.0
+    except ValueError:
+        is_valid = False
+        
+    if not is_valid:
         app.total_failures = (app.total_failures or 0) + 1
         db.session.add(app)
         try:

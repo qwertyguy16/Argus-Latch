@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Argus Latch Test</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: #2a2a2a;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #ccc;
+        }
+        input {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background-color: #333;
+            color: white;
+            box-sizing: border-box;
+        }
+        input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin-top: 1rem;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #captcha-container {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: center;
+            min-height: 80px;
+        }
+        #result {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 4px;
+            display: none;
+            word-break: break-all;
+        }
+        .success { background-color: rgba(76, 175, 80, 0.2); border: 1px solid #4CAF50; }
+        .error { background-color: rgba(244, 67, 54, 0.2); border: 1px solid #f44336; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 style="text-align: center; margin-top: 0;">Argus Latch Tester</h2>
+        <div class="form-group">
+            <label for="site-key">Site Key</label>
+            <input type="text" id="site-key" placeholder="Enter Site Key">
+        </div>
+        <div class="form-group">
+            <label for="secret-key">Secret Key (for verification)</label>
+            <input type="text" id="secret-key" placeholder="Enter Secret Key">
+        </div>
+        <button id="init-btn">Initialize Captcha</button>
+        
+        <form id="verify-form" style="display: none;">
+            <div id="captcha-container">
+                <!-- Argus Captcha will be rendered here -->
+                <div class="argus-captcha" id="argus-latch-element"></div>
+            </div>
+            <button type="submit" id="verify-btn" style="background-color: #2196F3;">Verify Token</button>
+        </form>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('init-btn').addEventListener('click', () => {
+            const siteKey = document.getElementById('site-key').value.trim();
+            if (!siteKey) {
+                alert('Please enter a Site Key');
+                return;
+            }
+
+            const captchaElement = document.getElementById('argus-latch-element');
+            
+            // Clear previous initialization state
+            captchaElement.innerHTML = '';
+            delete captchaElement.dataset.initialized;
+            delete captchaElement.dataset.verified;
+            
+            // Set the new site key
+            captchaElement.setAttribute('data-sitekey', siteKey);
+
+            // Show the verify form containing the captcha
+            document.getElementById('verify-form').style.display = 'block';
+
+            // Load or reload the script
+            const oldScript = document.getElementById('argus-script');
+            if (oldScript) {
+                oldScript.remove();
+            }
+            const script = document.createElement('script');
+            script.id = 'argus-script';
+            script.src = '/v1/captcha/api.js?t=' + Date.now(); // Cache busting
+            document.body.appendChild(script);
+            
+            document.getElementById('result').style.display = 'none';
+        });
+
+        document.getElementById('verify-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const secretKey = document.getElementById('secret-key').value.trim();
+            
+            // The widget injects an input named argus-captcha-response
+            const tokenInput = document.querySelector('input[name="argus-captcha-response"]');
+            const token = tokenInput ? tokenInput.value : null;
+
+            if (!token) {
+                alert('Please complete the captcha first!');
+                return;
+            }
+            if (!secretKey) {
+                alert('Please enter a Secret Key to verify the token');
+                return;
+            }
+
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.display = 'block';
+            resultDiv.className = '';
+            resultDiv.textContent = 'Verifying...';
+
+            try {
+                const formData = new FormData();
+                formData.append('secret', secretKey);
+                formData.append('response', token);
+
+                const response = await fetch('/v1/captcha/siteverify', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `<strong>Success!</strong><br>Risk Score: ${data.risk_score}<br>Challenge TS: ${data.challenge_ts}`;
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = `<strong>Error!</strong><br>Codes: ${data['error-codes'] ? data['error-codes'].join(', ') : 'Unknown error'}`;
+                }
+            } catch (err) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = 'Network error during verification';
+            }
+        });
+    </script>
+</body>
+</html>

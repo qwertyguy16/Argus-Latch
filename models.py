@@ -12,6 +12,7 @@ class CaptchaApplication(db.Model):
     mode = String(default='manual')
     block_vpns = Boolean(default=False)
     strict_mode = Boolean(default=False)
+    under_attack_mode = Boolean(default=False)
     total_challenges = Integer(default=0)
     total_successes = Integer(default=0)
     total_failures = Integer(default=0)

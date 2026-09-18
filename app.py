@@ -1,5 +1,5 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
@@ -25,6 +25,9 @@ db.init_app(app)
 
 app.register_blueprint(captcha_bp, url_prefix='/v1/captcha')
 
+@app.route('/')
+def test_page():
+    return render_template('test.html')
 @app.errorhandler(Exception)
 def handle_exception(e):
     if isinstance(e, HTTPException):

@@ -13,10 +13,78 @@
         typingCadence: [],
         touchPressures: [],
         canvasFingerprint: "",
-        webglRenderer: ""
+        webglRenderer: "",
+        hardwareConcurrency: navigator.hardwareConcurrency || 0,
+        deviceMemory: navigator.deviceMemory || 0,
+        audioFingerprint: "",
+        clickDurations: [],
+        maxMouseVelocity: 0
     };
 
     const initTime = Date.now();
+
+    // Audio Fingerprinting
+    try {
+        const audioCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 44100, 44100);
+        const oscillator = audioCtx.createOscillator();
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(10000, audioCtx.currentTime);
+        const compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-50, audioCtx.currentTime);
+        compressor.knee.setValueAtTime(40, audioCtx.currentTime);
+        compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+        compressor.attack.setValueAtTime(0, audioCtx.currentTime);
+        compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+        oscillator.connect(compressor);
+        compressor.connect(audioCtx.destination);
+        oscillator.start(0);
+        audioCtx.startRendering().then(buffer => {
+            let sum = 0;
+            const channelData = buffer.getChannelData(0);
+            for (let i = 4500; i < 5000; i++) {
+                sum += Math.abs(channelData[i]);
+            }
+            telemetryData.audioFingerprint = sum.toString();
+        }).catch(() => { });
+    } catch (e) { }
+
+    // Click duration
+    let mouseDownTime = 0;
+    document.addEventListener('mousedown', () => mouseDownTime = Date.now(), { passive: true });
+    document.addEventListener('mouseup', () => {
+        if (mouseDownTime > 0) {
+            telemetryData.clickDurations.push(Date.now() - mouseDownTime);
+        }
+    }, { passive: true });
+
+    async function solvePoW(sitekey) {
+        const timestamp = Date.now();
+        let nonce = 0;
+        const prefix = "0000";
+        const encoder = new TextEncoder();
+        while (true) {
+            const msg = sitekey + timestamp + nonce;
+            const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(msg));
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            if (hashHex.startsWith(prefix)) {
+                return { nonce, timestamp, hashHex };
+            }
+            nonce++;
+            if (nonce % 500 === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+    }
+
+    function obfuscatePayload(payloadStr, sitekey) {
+        let result = "";
+        for (let i = 0; i < payloadStr.length; i++) {
+            let keyChar = sitekey.charCodeAt(i % sitekey.length);
+            result += String.fromCharCode(payloadStr.charCodeAt(i) ^ keyChar);
+        }
+        return btoa(result);
+    }
 
     if (navigator.webdriver || window.document.__selenium_unwrapped || window.callPhantom || window._phantom || window.cdc_adoQpoasnfa76pfcZLmcfl_Array || document.documentElement.getAttribute("webdriver")) {
         telemetryData.webdriver = true;
@@ -72,8 +140,20 @@
 
     document.addEventListener('mousemove', function (e) {
         telemetryData.mouseEvents++;
+        const now = Date.now();
+        const t = now - initTime;
         if (telemetryData.mouseEvents % 5 === 0 && telemetryData.mouseTrajectory.length < 20) {
-            telemetryData.mouseTrajectory.push({ x: e.clientX, y: e.clientY, t: Date.now() - initTime });
+            telemetryData.mouseTrajectory.push({ x: e.clientX, y: e.clientY, t: t });
+        }
+        if (telemetryData.mouseTrajectory.length > 1) {
+            let last = telemetryData.mouseTrajectory[telemetryData.mouseTrajectory.length - 2];
+            let curr = { x: e.clientX, y: e.clientY, t: t };
+            let dist = Math.sqrt(Math.pow(curr.x - last.x, 2) + Math.pow(curr.y - last.y, 2));
+            let dt = curr.t - last.t;
+            if (dt > 0) {
+                let v = dist / dt;
+                if (v > telemetryData.maxMouseVelocity) telemetryData.maxMouseVelocity = v;
+            }
         }
     }, { passive: true });
 
@@ -130,20 +210,20 @@
 
             let mode = 'manual';
             let theme = 'auto';
+            let initialError = null;
 
             try {
                 const res = await fetch(`${HOST}/v1/captcha/settings?sitekey=${sitekey}`);
                 const data = await res.json();
                 if (!data.success) {
-                    container.innerHTML = `<div style="color:red; font-size:12px; padding:8px; border:1px solid red; border-radius:4px;">Argus Captcha Error: ${data.error || 'Failed to load settings'}</div>`;
-                    return;
+                    initialError = data.error || 'Failed to load settings';
+                } else {
+                    mode = data.mode || 'manual';
+                    theme = data.theme || 'auto';
                 }
-                mode = data.mode || 'manual';
-                theme = data.theme || 'auto';
             } catch (err) {
                 console.error("Argus Captcha Settings Error:", err);
-                container.innerHTML = `<div style="color:red; font-size:12px; padding:8px; border:1px solid red; border-radius:4px;">Argus Captcha Error: Network failure</div>`;
-                return;
+                initialError = "Network Error";
             }
 
 
@@ -167,9 +247,9 @@
                     border: '#525252',
                     text: '#f9f9f9',
                     subText: '#9ca3af',
-                    boxBg: '#fff',
-                    boxBorder: '#c1c1c1',
-                    hoverBorder: '#b2b2b2'
+                    boxBg: '#333333',
+                    boxBorder: '#525252',
+                    hoverBorder: '#6b7280'
                 };
             } else {
                 colors = {
@@ -184,8 +264,8 @@
             }
 
             widget.style.cssText = `
-                width: 100%;
-                max-width: 304px;
+                width: 340px;
+                max-width: 100%;
                 height: 78px;
                 background: ${colors.bg};
                 border-radius: 3px;
@@ -199,7 +279,7 @@
                 position: relative;
                 overflow: hidden;
                 transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                cursor: pointer;
+                cursor: default;
                 color: ${colors.text};
                 margin: 0 auto;
             `;
@@ -254,16 +334,17 @@
             `;
 
             const checkmark = document.createElement('div');
-            checkmark.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 9 17 20 6" style="stroke-dasharray: 50; stroke-dashoffset: 50;"></polyline></svg>`;
+            checkmark.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="14" cy="14" r="14" fill="#10b981"/><polyline points="8 14 12 18 20 10" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 50; stroke-dashoffset: 50;"></polyline></svg>`;
             checkmark.style.cssText = `
                 display: none;
                 position: absolute;
             `;
 
             const crossmark = document.createElement('div');
-            crossmark.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="6" y1="6" x2="18" y2="18" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
-                <line x1="18" y1="6" x2="6" y2="18" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
+            crossmark.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="14" cy="14" r="14" fill="#ef4444"/>
+                <line x1="9" y1="9" x2="19" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
+                <line x1="19" y1="9" x2="9" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
             </svg>`;
             crossmark.style.cssText = `
                 display: none;
@@ -335,15 +416,15 @@
 
             const logoImgContainer = document.createElement('div');
             logoImgContainer.style.cssText = `
-                width: 32px;
-                height: 32px;
+                width: 46px;
+                height: 46px;
                 margin-bottom: 2px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
             `;
             // Subtle lock or shield icon to look like a brand logo (like recaptcha loop)
-            logoImgContainer.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${theme === 'dark' ? '#f9f9f9' : '#1f2937'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`;
+            logoImgContainer.innerHTML = `<img src="https://argusgroup.co.uk/static/images/Logo${theme === 'dark' ? 'white' : 'black'}.png" style="width: 42px; height: 42px; object-fit: contain;" alt="Argus Logo">`;
 
             brand.innerText = "Argus";
             brand.style.cssText = `
@@ -402,10 +483,10 @@
                 `;
 
                 const badgeIcon = document.createElement('div');
-                badgeIcon.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`;
+                badgeIcon.innerHTML = `<img src="https://argusgroup.co.uk/static/images/Logo${theme === 'dark' ? 'white' : 'black'}.png" style="width: 24px; height: 24px; object-fit: contain;" alt="Argus Logo">`;
                 badgeIcon.style.cssText = `
-                    min-width: 16px;
-                    height: 16px;
+                    min-width: 24px;
+                    height: 24px;
                     display: flex;
                     justify-content: center;
                     align-items: center;
@@ -468,68 +549,76 @@
                 form.appendChild(honeypot);
             }
 
-            // Visual Challenge UI Container (Hidden initially)
+            // Visual Challenge UI Modal Overlay
+            const visualOverlay = document.createElement('div');
+            visualOverlay.style.cssText = `
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 2147483647;
+                align-items: center;
+                justify-content: center;
+            `;
+
             const visualContainer = document.createElement('div');
             visualContainer.style.cssText = `
-                display: none;
                 width: 100%;
-                margin-top: 10px;
-                padding: 10px;
-                background: #fff;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
+                max-width: 360px;
+                padding: 24px;
+                background: ${colors.bg};
+                border: 1px solid ${colors.border};
+                border-radius: 12px;
                 box-sizing: border-box;
                 text-align: center;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+                position: relative;
             `;
-            const visualImg = document.createElement('img');
-            visualImg.style.cssText = `
-                max-width: 100%;
-                border-radius: 4px;
-                margin-bottom: 8px;
-            `;
-            const visualInput = document.createElement('input');
-            visualInput.type = 'text';
-            visualInput.placeholder = 'Enter the text above';
-            visualInput.style.cssText = `
-                width: 100%;
-                padding: 10px 12px;
-                border: 1px solid #d1d5db;
-                border-radius: 6px;
-                font-size: 14px;
-                margin-bottom: 12px;
-                box-sizing: border-box;
-                transition: all 0.2s ease;
-                outline: none;
-            `;
-            visualInput.onfocus = () => {
-                visualInput.style.borderColor = '#3b82f6';
-                visualInput.style.boxShadow = '0 0 0 2px rgba(59,130,246,0.1)';
-            };
-            visualInput.onblur = () => {
-                visualInput.style.borderColor = '#d1d5db';
-                visualInput.style.boxShadow = 'none';
-            };
-            const visualBtn = document.createElement('button');
-            visualBtn.innerText = 'Verify';
-            visualBtn.type = 'button';
-            visualBtn.style.cssText = `
-                width: 100%;
-                padding: 10px;
-                background: #3b82f6;
-                color: white;
+
+            const closeButton = document.createElement('button');
+            closeButton.innerHTML = '&times;';
+            closeButton.style.cssText = `
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                width: 30px;
+                height: 30px;
+                background: transparent;
+                color: ${colors.subText};
                 border: none;
-                border-radius: 6px;
+                border-radius: 50%;
+                font-size: 26px;
+                line-height: 1;
                 cursor: pointer;
-                font-size: 14px;
-                font-weight: 500;
-                transition: background 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: color 0.2s, background 0.2s;
+                z-index: 10;
             `;
-            visualBtn.onmouseenter = () => visualBtn.style.background = '#2563eb';
-            visualBtn.onmouseleave = () => visualBtn.style.background = '#3b82f6';
-            visualContainer.appendChild(visualImg);
-            visualContainer.appendChild(visualInput);
-            visualContainer.appendChild(visualBtn);
-            container.appendChild(visualContainer);
+            closeButton.onmouseover = () => { closeButton.style.background = 'rgba(0,0,0,0.05)'; closeButton.style.color = colors.text; };
+            closeButton.onmouseout = () => { closeButton.style.background = 'transparent'; closeButton.style.color = colors.subText; };
+            closeButton.onclick = () => {
+                visualOverlay.style.display = 'none';
+                isProcessing = false;
+                isFailed = false;
+                spinner.style.display = 'none';
+                crossmark.style.display = 'none';
+                checkmark.style.display = 'none';
+                exclamation.style.display = 'none';
+                box.style.display = 'block';
+                box.style.borderColor = colors.boxBorder;
+                text.innerText = "I'm not a robot";
+                text.style.color = colors.text;
+                subText.style.display = 'none';
+                widget.style.borderColor = colors.border;
+            };
+
+            visualOverlay.appendChild(visualContainer);
+            document.body.appendChild(visualOverlay);
 
             if (!document.getElementById('argus-captcha-styles')) {
                 const style = document.createElement('style');
@@ -539,7 +628,13 @@
                     @keyframes argus-fade { from { opacity: 0; } to { opacity: 1; } }
                     @keyframes argus-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
                     @keyframes argus-draw {
+                        from { stroke-dashoffset: 50; }
                         to { stroke-dashoffset: 0; }
+                    }
+                    @keyframes argus-pop-in {
+                        0% { transform: scale(0); opacity: 0; }
+                        60% { transform: scale(1.15); opacity: 1; }
+                        100% { transform: scale(1); opacity: 1; }
                     }
                     @keyframes argus-pop-out {
                         0% { transform: scale(1); opacity: 1; }
@@ -558,12 +653,16 @@
                 spinner.style.display = 'none';
                 box.style.display = 'none';
                 checkmark.style.display = 'block';
+                checkmark.style.animation = 'none';
+                void checkmark.offsetWidth;
+                checkmark.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
+
                 const polyline = checkmark.querySelector('polyline');
                 polyline.style.animation = 'none';
                 void polyline.offsetWidth;
-                polyline.style.animation = 'argus-draw 0.4s ease forwards';
+                polyline.style.animation = 'argus-draw 0.4s ease 0.2s both';
 
-                text.innerText = "Verification complete";
+                text.innerText = "Success!";
                 text.style.color = '#10b981';
                 subText.style.display = 'none';
 
@@ -586,11 +685,24 @@
                         HTMLFormElement.prototype.submit.call(form);
                     }
                 }
+
+                const cbName = container.dataset.callback;
+                if (cbName && typeof window[cbName] === 'function') {
+                    window[cbName](token);
+                }
+                container.dispatchEvent(new CustomEvent('argus-success', { detail: { token: token } }));
             };
 
             const triggerError = (msg, isFatal = false) => {
                 isProcessing = false;
                 isFailed = true;
+
+                const errorCbName = container.dataset.errorCallback;
+                if (errorCbName && typeof window[errorCbName] === 'function') {
+                    window[errorCbName](msg);
+                }
+                container.dispatchEvent(new CustomEvent('argus-error', { detail: { message: msg } }));
+
                 spinner.style.display = 'none';
                 box.style.display = 'none';
 
@@ -610,14 +722,18 @@
                 }
 
                 crossmark.style.display = 'block';
+                crossmark.style.animation = 'none';
+                void crossmark.offsetWidth;
+                crossmark.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
+
                 const lines = crossmark.querySelectorAll('line');
                 lines[0].style.animation = 'none';
                 lines[1].style.animation = 'none';
                 void crossmark.offsetWidth;
-                lines[0].style.animation = 'argus-draw 0.3s ease forwards';
-                lines[1].style.animation = 'argus-draw 0.3s ease 0.15s forwards';
+                lines[0].style.animation = 'argus-draw 0.3s ease 0.2s both';
+                lines[1].style.animation = 'argus-draw 0.3s ease 0.35s both';
 
-                text.innerText = "Verification failed";
+                text.innerText = "Failed!";
                 text.style.color = colors.text;
                 subText.style.display = 'none'; // Ensure no details are shown
                 widget.style.borderColor = colors.border;
@@ -642,6 +758,10 @@
                 }, 3000);
             };
 
+            if (initialError) {
+                triggerError(initialError, true);
+            }
+
             const executeChallenge = async () => {
                 if (container.dataset.verified === "true") return;
                 if (isProcessing || isFailed) return; // prevent spamming clicks
@@ -653,9 +773,13 @@
                     text.innerText = "Verifying you are human...";
                 }
 
+                console.log(`[Argus Captcha] Initiating challenge...`);
+
                 telemetryData.timeOnPage = Date.now() - initTime;
 
-                const tData = btoa(JSON.stringify({
+                const powData = await solvePoW(sitekey);
+
+                const rawTelemetry = {
                     webdriver: telemetryData.webdriver,
                     mouseScore: analyzeMouseBehavior(),
                     timeOnPage: telemetryData.timeOnPage,
@@ -664,10 +788,18 @@
                     touchPressures: telemetryData.touchPressures,
                     canvasFingerprint: telemetryData.canvasFingerprint,
                     webglRenderer: telemetryData.webglRenderer,
+                    hardwareConcurrency: telemetryData.hardwareConcurrency,
+                    deviceMemory: telemetryData.deviceMemory,
+                    audioFingerprint: telemetryData.audioFingerprint,
+                    clickDurations: telemetryData.clickDurations,
+                    maxMouseVelocity: telemetryData.maxMouseVelocity,
                     honeypot: getHoneypotValue(container),
                     forceVisual: window.forceArgusVisual === true,
-                    url: window.location.href
-                }));
+                    url: window.location.href,
+                    pow: powData
+                };
+
+                const tData = obfuscatePayload(JSON.stringify(rawTelemetry), sitekey);
 
                 const payload = {
                     sitekey: sitekey,
@@ -684,6 +816,7 @@
                     const data = await res.json();
 
                     if (data.success && data.token) {
+                        console.log(`[Argus Captcha] Validation [PASS]`);
                         injectToken(data.token);
                     }
                     else if (data.requires_visual) {
@@ -692,50 +825,192 @@
                         subText.innerText = "Please solve the challenge below.";
                         subText.style.display = 'block';
 
-                        visualImg.src = "data:image/png;base64," + data.image;
-                        visualContainer.style.display = 'block';
-                        visualInput.focus();
+                        visualContainer.innerHTML = ''; // clear
+                        visualContainer.appendChild(closeButton);
 
-                        const visualTicket = data.visual_ticket;
+                        const headerDiv = document.createElement('div');
+                        headerDiv.style.cssText = `
+                            text-align: left;
+                            margin-bottom: 20px;
+                            padding-right: 30px;
+                        `;
 
-                        visualBtn.onclick = async () => {
-                            visualBtn.innerText = 'Verifying...';
-                            visualBtn.disabled = true;
-                            try {
-                                const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        sitekey: sitekey,
-                                        visual_ticket: visualTicket,
-                                        answer: visualInput.value
-                                    })
-                                });
-                                const visData = await vRes.json();
-                                if (visData.success && visData.token) {
-                                    visualContainer.style.display = 'none';
-                                    injectToken(visData.token);
-                                } else {
-                                    visualInput.value = '';
-                                    visualInput.style.borderColor = '#ef4444';
-                                    visualBtn.innerText = 'Verify';
-                                    visualBtn.disabled = false;
+                        const title = document.createElement('h3');
+                        title.innerText = "Security Challenge";
+                        title.style.cssText = `
+                            margin: 0 0 6px 0;
+                            font-size: 18px;
+                            color: ${colors.text};
+                            font-weight: 600;
+                            line-height: 1.2;
+                            font-family: inherit;
+                        `;
+
+                        const instr = document.createElement('p');
+                        instr.style.cssText = `
+                            margin: 0;
+                            font-size: 14px;
+                            color: ${colors.subText};
+                            line-height: 1.4;
+                            font-family: inherit;
+                        `;
+
+                        headerDiv.appendChild(title);
+                        headerDiv.appendChild(instr);
+                        visualContainer.appendChild(headerDiv);
+
+                        if (data.visual_type === 'slider') {
+                            instr.innerText = "Drag the slider to fit the puzzle piece.";
+                            const bgContainer = document.createElement('div');
+                            bgContainer.style.cssText = `position: relative; width: 100%; height: 150px; background-image: url(data:image/png;base64,${data.bg_image}); background-size: 100% 100%; border-radius: 4px; overflow: hidden;`;
+
+                            const pieceImg = document.createElement('img');
+                            pieceImg.src = "data:image/png;base64," + data.piece_image;
+                            pieceImg.style.cssText = `position: absolute; top: ${data.piece_y}px; left: 0px; width: 12.5%; height: 40px; z-index: 2; pointer-events: none; border-radius: 5px;`;
+                            bgContainer.appendChild(pieceImg);
+
+                            const sliderTrack = document.createElement('div');
+                            sliderTrack.style.cssText = `position: relative; width: 100%; height: 40px; background: ${colors.boxBg}; border: 1px solid ${colors.boxBorder}; border-radius: 20px; margin-top: 15px; box-sizing: border-box; overflow: hidden;`;
+
+                            const sliderFill = document.createElement('div');
+                            sliderFill.style.cssText = `position: absolute; top: 0; left: 0; height: 100%; width: 0; background: #3b82f6; opacity: 0.2; border-radius: 20px 0 0 20px;`;
+                            sliderTrack.appendChild(sliderFill);
+
+                            const sliderHandle = document.createElement('div');
+                            sliderHandle.style.cssText = `position: absolute; top: 0; left: 0; width: 12.5%; height: 100%; background: #3b82f6; border-radius: 20px; cursor: grab; display: flex; justify-content: center; align-items: center; color: white; transition: background 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); user-select: none; font-size: 18px;`;
+                            sliderHandle.innerHTML = '&#8594;'; // right arrow
+                            sliderTrack.appendChild(sliderHandle);
+
+                            visualContainer.appendChild(bgContainer);
+                            visualContainer.appendChild(sliderTrack);
+                            visualOverlay.style.display = 'flex';
+
+                            const visualTicket = data.visual_ticket;
+                            let isDragging = false;
+                            let startX = 0;
+                            let currentX = 0;
+                            let maxTravel = 0;
+
+                            const onMove = (e) => {
+                                if (!isDragging) return;
+                                let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                                let deltaX = clientX - startX;
+                                currentX = Math.max(0, Math.min(deltaX, maxTravel));
+                                sliderHandle.style.left = currentX + 'px';
+                                pieceImg.style.left = currentX + 'px';
+                                sliderFill.style.width = (currentX + (sliderHandle.clientWidth / 2)) + 'px';
+                                e.preventDefault(); // prevent scrolling
+                            };
+
+                            const onEnd = async () => {
+                                if (!isDragging) return;
+                                isDragging = false;
+                                document.removeEventListener('mousemove', onMove);
+                                document.removeEventListener('mouseup', onEnd);
+                                document.removeEventListener('touchmove', onMove);
+                                document.removeEventListener('touchend', onEnd);
+                                sliderHandle.style.cursor = 'grab';
+
+                                // Submit
+                                sliderHandle.innerHTML = '<div style="width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;"></div>';
+                                try {
+                                    // Map currentX back to the native 320px scale backend expects
+                                    const nativeAnswer = currentX * (320 / sliderTrack.clientWidth);
+                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            sitekey: sitekey,
+                                            visual_ticket: visualTicket,
+                                            answer: nativeAnswer.toString()
+                                        })
+                                    });
+                                    const visData = await vRes.json();
+                                    if (visData.success && visData.token) {
+                                        console.log(`[Argus Captcha] Validation [PASS] (Slider)`);
+                                        visualOverlay.style.display = 'none';
+                                        injectToken(visData.token);
+                                    } else {
+                                        visualOverlay.style.display = 'none';
+                                        triggerError('Validation failed', false);
+                                    }
+                                } catch (e) {
+                                    visualOverlay.style.display = 'none';
+                                    triggerError('Validation failed', false);
                                 }
-                            } catch (e) {
-                                visualInput.value = '';
-                                visualInput.style.borderColor = '#ef4444';
-                                text.style.color = '#ef4444';
-                                isProcessing = false;
-                                visualBtn.innerText = 'Verify';
-                                visualBtn.disabled = false;
-                            }
-                        };
+                            };
+
+                            const onStart = (e) => {
+                                isDragging = true;
+                                maxTravel = sliderTrack.clientWidth - sliderHandle.clientWidth;
+                                startX = (e.touches ? e.touches[0].clientX : e.clientX) - currentX;
+                                sliderHandle.style.cursor = 'grabbing';
+                                sliderHandle.style.transition = 'none';
+                                pieceImg.style.transition = 'none';
+                                sliderFill.style.transition = 'none';
+                                document.addEventListener('mousemove', onMove);
+                                document.addEventListener('mouseup', onEnd);
+                                document.addEventListener('touchmove', onMove, { passive: false });
+                                document.addEventListener('touchend', onEnd);
+                                e.preventDefault();
+                            };
+
+                            sliderHandle.addEventListener('mousedown', onStart);
+                            sliderHandle.addEventListener('touchstart', onStart, { passive: false });
+
+                        } else {
+                            instr.innerText = "Type the text from the image below.";
+                            // Text challenge fallback
+                            const visualImg = document.createElement('img');
+                            visualImg.src = "data:image/png;base64," + data.image;
+                            visualImg.style.cssText = `max-width: 100%; border-radius: 4px; margin-bottom: 8px;`;
+                            const visualInput = document.createElement('input');
+                            visualInput.type = 'text';
+                            visualInput.placeholder = 'Enter the text above';
+                            visualInput.style.cssText = `width: 100%; padding: 10px 12px; background: ${colors.boxBg}; color: ${colors.text}; border: 1px solid ${colors.boxBorder}; border-radius: 6px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; outline: none;`;
+                            visualInput.onfocus = () => { visualInput.style.borderColor = '#3b82f6'; };
+                            visualInput.onblur = () => { visualInput.style.borderColor = colors.boxBorder; };
+                            const visualBtn = document.createElement('button');
+                            visualBtn.innerText = 'Verify';
+                            visualBtn.type = 'button';
+                            visualBtn.style.cssText = `width: 100%; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s;`;
+                            visualContainer.appendChild(visualImg);
+                            visualContainer.appendChild(visualInput);
+                            visualContainer.appendChild(visualBtn);
+                            visualOverlay.style.display = 'flex';
+                            visualInput.focus();
+
+                            const visualTicket = data.visual_ticket;
+                            visualBtn.onclick = async () => {
+                                visualBtn.innerText = 'Verifying...';
+                                visualBtn.disabled = true;
+                                try {
+                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ sitekey: sitekey, visual_ticket: visualTicket, answer: visualInput.value })
+                                    });
+                                    const visData = await vRes.json();
+                                    if (visData.success && visData.token) {
+                                        visualOverlay.style.display = 'none';
+                                        injectToken(visData.token);
+                                    } else {
+                                        visualOverlay.style.display = 'none';
+                                        triggerFail();
+                                    }
+                                } catch (e) {
+                                    visualOverlay.style.display = 'none';
+                                    triggerFail();
+                                }
+                            };
+                        }
                     }
                     else {
                         throw { message: data.error || "Verification failed", fatal: data.error === "Invalid sitekey" || data.error === "Domain not authorized" || data.error === "Missing sitekey" };
                     }
                 } catch (err) {
                     console.error("Argus Captcha Error:", err);
+                    console.log(`[Argus Captcha] Validation [FAIL]: ${err.message || 'Unknown Error'}`);
                     triggerError(err.message, err.fatal === true);
                 }
             };
