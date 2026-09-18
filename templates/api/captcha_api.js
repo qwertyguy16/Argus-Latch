@@ -264,10 +264,8 @@
                 };
             }
 
+            widget.classList.add('argus-captcha-widget-box');
             widget.style.cssText = `
-                width: 340px;
-                max-width: 100%;
-                height: 78px;
                 background: ${colors.bg};
                 border-radius: 3px;
                 border: 1px solid ${colors.border};
@@ -645,6 +643,17 @@
                         0%, 100% { transform: translateX(0); }
                         25% { transform: translateX(-5px); }
                         75% { transform: translateX(5px); }
+                    }
+                    .argus-captcha-widget-box {
+                        width: 340px;
+                        max-width: 100%;
+                        height: 78px;
+                    }
+                    @media (max-width: 380px) {
+                        .argus-captcha-widget-box {
+                            width: 100%;
+                            height: 72px;
+                        }
                     }
                 `;
                 document.head.appendChild(style);
