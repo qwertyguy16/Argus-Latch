@@ -172,44 +172,21 @@ import subprocess
 import hashlib
 from flask import current_app
 
-@lru_cache(maxsize=32)
-def get_obfuscated_js(url_root, mtime):
-    raw_js = render_template('api/captcha_api.js')
-    
-    import secrets
-    unique_id = secrets.token_hex(4)
-    hash_str = hashlib.md5(f"{url_root}_{mtime}".encode()).hexdigest()
-    temp_in = os.path.join(current_app.root_path, f"temp_raw_{hash_str}_{unique_id}.js")
-    temp_out = os.path.join(current_app.root_path, f"temp_obf_{hash_str}_{unique_id}.js")
-    
-    try:
-        with open(temp_in, 'w', encoding='utf-8') as f:
-            f.write(raw_js)
-            
-        cmd = f"javascript-obfuscator {temp_in} --output {temp_out} --compact true --control-flow-flattening true --dead-code-injection true --disable-console-output true --string-array true --string-array-encoding rc4 --string-array-threshold 0.75"
-        subprocess.run(cmd, shell=True, check=True)
-        
-        with open(temp_out, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        import logging
-        logging.error(f"JS Obfuscation failed: {e}")
-        return raw_js
-    finally:
-        if os.path.exists(temp_in):
-            os.remove(temp_in)
-        if os.path.exists(temp_out):
-            os.remove(temp_out)
-
 @captcha_bp.route('/api.js')
 def api_js():
     """Serves the JavaScript for the Captcha widget."""
-    template_path = os.path.join(current_app.root_path, 'templates', 'api', 'captcha_api.js')
-    mtime = os.path.getmtime(template_path) if os.path.exists(template_path) else 0
+    min_path = os.path.join(current_app.root_path, 'static', 'captcha_api.min.js')
     
-    obfuscated_js = get_obfuscated_js(request.url_root, mtime)
-    
-    response = make_response(obfuscated_js)
+    if os.path.exists(min_path):
+        with open(min_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    else:
+        # Fallback for local development if build.py hasn't been run
+        raw_path = os.path.join(current_app.root_path, 'templates', 'api', 'captcha_api.js')
+        with open(raw_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+    response = make_response(content)
     response.headers['Content-Type'] = 'application/javascript'
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'

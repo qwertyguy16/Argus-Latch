@@ -1,6 +1,7 @@
 (function () {
     // Argus Captcha Intelligent Widget Script - Premium Version
-    const HOST = "{{ request.url_root }}".replace(/\/$/, "");
+    const scriptSrc = document.currentScript ? document.currentScript.src : window.location.origin + '/v1/captcha';
+    const HOST = scriptSrc.split('/v1/captcha')[0];
 
     // Telemetry Collection
     let telemetryData = {
