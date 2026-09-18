@@ -192,6 +192,8 @@ def api_js():
     response.headers['Pragma'] = 'no-cache'
     return response
 
+settings_cache = {}
+
 @captcha_bp.route('/settings', methods=['GET', 'OPTIONS'])
 @limiter.limit("60 per minute")
 def get_settings():
@@ -203,18 +205,42 @@ def get_settings():
     if not site_key:
         return jsonify({"success": False, "error": "Missing sitekey"}), 400
         
-    app = CaptchaApplication.query.filter_by(site_key=site_key).first()
-    if not app:
-        return jsonify({"success": False, "error": "Invalid sitekey"}), 400
+    # Check memory cache first (60s TTL)
+    now = time.time()
+    cache_entry = settings_cache.get(site_key)
+    if cache_entry and now - cache_entry['timestamp'] < 60:
+        app_theme = cache_entry['theme']
+        app_mode = cache_entry['mode']
+        app_domains = cache_entry['domains']
+    else:
+        # Hit the database
+        app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+        if not app:
+            return jsonify({"success": False, "error": "Invalid sitekey"}), 400
+            
+        app_theme = app.theme or 'auto'
+        app_mode = app.mode or 'manual'
+        app_domains = app.domains
         
-    if not is_domain_authorized(app.domains, request):
+        # Save to cache
+        settings_cache[site_key] = {
+            'theme': app_theme,
+            'mode': app_mode,
+            'domains': app_domains,
+            'timestamp': now
+        }
+        
+    if not is_domain_authorized(app_domains, request):
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
         
-    return jsonify({
+    response = jsonify({
         "success": True,
-        "theme": app.theme or 'auto',
-        "mode": app.mode or 'manual'
+        "theme": app_theme,
+        "mode": app_mode
     })
+    # Tell the browser to cache this for 5 minutes (drastically speeds up repeat page loads)
+    response.headers['Cache-Control'] = 'public, max-age=300'
+    return response
 
 def is_domain_authorized(app_domains, request):
     if not app_domains:
