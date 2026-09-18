@@ -1047,11 +1047,7 @@
                                 }
                             }, 1000);
 
-                            if (typeof window.showNotification === 'function') {
-                                window.showNotification("Please complete the captcha first.", "error");
-                            } else {
-                                alert("Please complete the captcha first.");
-                            }
+                            // Custom alert/notification logic should be implemented by the user
                         }
                     });
                 }
