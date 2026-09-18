@@ -212,6 +212,7 @@
             let mode = 'manual';
             let theme = 'auto';
             let initialError = null;
+            let isTestMode = false;
 
             try {
                 const res = await fetch(`${HOST}/v1/captcha/settings?sitekey=${sitekey}`);
@@ -221,6 +222,7 @@
                 } else {
                     mode = data.mode || 'manual';
                     theme = data.theme || 'auto';
+                    isTestMode = data.is_test || false;
                 }
             } catch (err) {
                 console.error("Argus Captcha Settings Error:", err);
@@ -342,8 +344,8 @@
             const crossmark = document.createElement('div');
             crossmark.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="14" cy="14" r="14" fill="#ef4444"/>
-                <line x1="9" y1="9" x2="19" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
-                <line x1="19" y1="9" x2="9" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 30; stroke-dashoffset: 30;"></line>
+                <line x1="9" y1="9" x2="19" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 15; stroke-dashoffset: 15;"></line>
+                <line x1="19" y1="9" x2="9" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 15; stroke-dashoffset: 15;"></line>
             </svg>`;
             crossmark.style.cssText = `
                 display: none;
@@ -536,6 +538,21 @@
 
             container.appendChild(widget);
 
+            if (isTestMode) {
+                const testBanner = document.createElement('div');
+                testBanner.innerText = "For testing only, if seen, report to site owner.";
+                testBanner.style.cssText = `
+                    color: #ef4444;
+                    font-size: 9px;
+                    font-weight: 600;
+                    margin-top: 2px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                `;
+                textContainer.appendChild(testBanner);
+            }
+
             // Inject Honeypot
             let form = container.closest('form');
             if (form && !form.querySelector('input[name="website_url"]')) {
@@ -630,6 +647,14 @@
                         from { stroke-dashoffset: 50; }
                         to { stroke-dashoffset: 0; }
                     }
+                    @keyframes argus-draw-cross {
+                        from { stroke-dashoffset: 15; }
+                        to { stroke-dashoffset: 0; }
+                    }
+                    @keyframes argus-draw-exclamation {
+                        from { stroke-dashoffset: 10; }
+                        to { stroke-dashoffset: 0; }
+                    }
                     @keyframes argus-pop-in {
                         0% { transform: scale(0); opacity: 0; }
                         60% { transform: scale(1.15); opacity: 1; }
@@ -719,8 +744,8 @@
                 if (isFatal) {
                     exclamation.style.display = 'block';
                     const lines = exclamation.querySelectorAll('line');
-                    lines[0].style.animation = 'argus-draw 0.3s ease forwards';
-                    lines[1].style.animation = 'argus-draw 0.3s ease 0.15s forwards';
+                    lines[0].style.animation = 'argus-draw-exclamation 0.3s ease forwards';
+                    lines[1].style.animation = 'argus-draw-exclamation 0.3s ease 0.15s forwards';
 
                     text.innerText = "Error";
                     text.style.color = '#f59e0b';
@@ -740,8 +765,8 @@
                 lines[0].style.animation = 'none';
                 lines[1].style.animation = 'none';
                 void crossmark.offsetWidth;
-                lines[0].style.animation = 'argus-draw 0.3s ease 0.2s both';
-                lines[1].style.animation = 'argus-draw 0.3s ease 0.35s both';
+                lines[0].style.animation = 'argus-draw-cross 0.3s ease 0.2s both';
+                lines[1].style.animation = 'argus-draw-cross 0.3s ease 0.35s both';
 
                 text.innerText = "Failed!";
                 text.style.color = colors.text;
@@ -785,38 +810,47 @@
 
                 console.log(`[Argus Captcha] Initiating challenge...`);
 
-                telemetryData.timeOnPage = Date.now() - initTime;
-
-                const powData = await solvePoW(sitekey);
-
-                const rawTelemetry = {
-                    webdriver: telemetryData.webdriver,
-                    mouseScore: analyzeMouseBehavior(),
-                    timeOnPage: telemetryData.timeOnPage,
-                    screenRes: telemetryData.screenRes,
-                    typingCadence: telemetryData.typingCadence,
-                    touchPressures: telemetryData.touchPressures,
-                    canvasFingerprint: telemetryData.canvasFingerprint,
-                    webglRenderer: telemetryData.webglRenderer,
-                    hardwareConcurrency: telemetryData.hardwareConcurrency,
-                    deviceMemory: telemetryData.deviceMemory,
-                    audioFingerprint: telemetryData.audioFingerprint,
-                    clickDurations: telemetryData.clickDurations,
-                    maxMouseVelocity: telemetryData.maxMouseVelocity,
-                    honeypot: getHoneypotValue(container),
-                    forceVisual: window.forceArgusVisual === true,
-                    url: window.location.href,
-                    pow: powData
-                };
-
-                const tData = obfuscatePayload(JSON.stringify(rawTelemetry), sitekey);
-
-                const payload = {
-                    sitekey: sitekey,
-                    telemetry: tData
-                };
-
                 try {
+                    telemetryData.timeOnPage = Date.now() - initTime;
+
+                    let powData = null;
+                    try {
+                        if (window.crypto && window.crypto.subtle) {
+                            powData = await solvePoW(sitekey);
+                        } else {
+                            console.warn("[Argus Captcha] WebCrypto API is not available. PoW skipped.");
+                        }
+                    } catch (e) {
+                        console.warn("[Argus Captcha] PoW generation failed.", e);
+                    }
+
+                    const rawTelemetry = {
+                        webdriver: telemetryData.webdriver,
+                        mouseScore: analyzeMouseBehavior(),
+                        timeOnPage: telemetryData.timeOnPage,
+                        screenRes: telemetryData.screenRes,
+                        typingCadence: telemetryData.typingCadence,
+                        touchPressures: telemetryData.touchPressures,
+                        canvasFingerprint: telemetryData.canvasFingerprint,
+                        webglRenderer: telemetryData.webglRenderer,
+                        hardwareConcurrency: telemetryData.hardwareConcurrency,
+                        deviceMemory: telemetryData.deviceMemory,
+                        audioFingerprint: telemetryData.audioFingerprint,
+                        clickDurations: telemetryData.clickDurations,
+                        maxMouseVelocity: telemetryData.maxMouseVelocity,
+                        honeypot: getHoneypotValue(container),
+                        forceVisual: window.forceArgusVisual === true,
+                        url: window.location.href,
+                        pow: powData
+                    };
+
+                    const tData = obfuscatePayload(JSON.stringify(rawTelemetry), sitekey);
+
+                    const payload = {
+                        sitekey: sitekey,
+                        telemetry: tData
+                    };
+
                     const res = await fetch(`${HOST}/v1/captcha/challenge`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },

@@ -9,6 +9,40 @@ from functools import lru_cache
 
 captcha_bp = Blueprint('captcha', __name__, url_prefix='/captcha')
 
+TEST_KEYS = {
+    'argus_1x000000000000000000000000': {'secret': 'sk_1x000000000000000000000000', 'type': 'pass'},
+    'argus_2x000000000000000000000000': {'secret': 'sk_2x000000000000000000000000', 'type': 'fail'},
+    'argus_3x000000000000000000000000': {'secret': 'sk_3x000000000000000000000000', 'type': 'auto'}
+}
+
+class MockTestApp:
+    def __init__(self, site_key, secret_key, test_type):
+        self.site_key = site_key
+        self.secret_key = secret_key
+        self.domains = ""
+        self.mode = "manual"
+        self.theme = "auto"
+        self.block_vpns = False
+        self.strict_mode = False
+        self.under_attack_mode = False
+        self.total_challenges = 0
+        self.total_successes = 0
+        self.total_failures = 0
+        self.is_test = True
+        self.test_type = test_type
+
+def get_app_by_sitekey(site_key):
+    if site_key in TEST_KEYS:
+        data = TEST_KEYS[site_key]
+        return MockTestApp(site_key, data['secret'], data['type'])
+    return CaptchaApplication.query.filter_by(site_key=site_key).first()
+
+def get_app_by_secret(secret_key):
+    for sk, data in TEST_KEYS.items():
+        if data['secret'] == secret_key:
+            return MockTestApp(sk, secret_key, data['type'])
+    return CaptchaApplication.query.filter_by(secret_key=secret_key).first()
+
 def generate_visual_challenge():
     import io
     import base64
@@ -212,21 +246,24 @@ def get_settings():
         app_theme = cache_entry['theme']
         app_mode = cache_entry['mode']
         app_domains = cache_entry['domains']
+        app_is_test = cache_entry.get('is_test', False)
     else:
         # Hit the database
-        app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+        app = get_app_by_sitekey(site_key)
         if not app:
             return jsonify({"success": False, "error": "Invalid sitekey"}), 400
             
         app_theme = app.theme or 'auto'
         app_mode = app.mode or 'manual'
         app_domains = app.domains
+        app_is_test = getattr(app, 'is_test', False)
         
         # Save to cache
         settings_cache[site_key] = {
             'theme': app_theme,
             'mode': app_mode,
             'domains': app_domains,
+            'is_test': app_is_test,
             'timestamp': now
         }
         
@@ -236,7 +273,8 @@ def get_settings():
     response = jsonify({
         "success": True,
         "theme": app_theme,
-        "mode": app_mode
+        "mode": app_mode,
+        "is_test": app_is_test
     })
     # Tell the browser to cache this for 5 minutes (drastically speeds up repeat page loads)
     response.headers['Cache-Control'] = 'public, max-age=300'
@@ -320,7 +358,7 @@ def challenge():
     if not site_key:
         return jsonify({"success": False, "error": "Missing sitekey"}), 400
         
-    app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+    app = get_app_by_sitekey(site_key)
     if not app:
         return jsonify({"success": False, "error": "Invalid sitekey"}), 400
 
@@ -328,14 +366,15 @@ def challenge():
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
 
     # Increment challenges
-    app.total_challenges = (app.total_challenges or 0) + 1
-    db.session.add(app)
-    try:
-        db.session.commit()
-    except Exception as e:
-        import logging
-        logging.error(f"Failed to commit challenge increment: {e}")
-        db.session.rollback()
+    if not getattr(app, 'is_test', False):
+        app.total_challenges = (app.total_challenges or 0) + 1
+        db.session.add(app)
+        try:
+            db.session.commit()
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to commit challenge increment: {e}")
+            db.session.rollback()
 
     # 2. Intelligence: Probabilistic Telemetry Analysis
     risk_score = 0.0
@@ -434,13 +473,22 @@ def challenge():
     if app.block_vpns and vpn_detected:
         return jsonify({"success": False, "error": "VPNs and Proxies are blocked by this application."}), 403
 
+    # Check if Visual Challenge is required
+    requires_visual = False
+    
+    if getattr(app, 'is_test', False):
+        if app.test_type == 'pass':
+            risk_score = 0.0
+            requires_visual = False
+        elif app.test_type == 'fail':
+            risk_score = 1.0
+        # 'auto' continues normally
+        
     risk_score = min(1.0, risk_score)
     if risk_score >= 0.85:
         print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score})")
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
-    # Check if Visual Challenge is required
-    requires_visual = False
     if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
         requires_visual = True
         
@@ -492,7 +540,7 @@ def siteverify():
             "error-codes": ["missing-input-secret" if not secret else "missing-input-response"]
         }), 400
         
-    app = CaptchaApplication.query.filter_by(secret_key=secret).first()
+    app = get_app_by_secret(secret)
     if not app:
         return jsonify({
             "success": False,
@@ -542,14 +590,15 @@ def siteverify():
         expires = datetime.utcfromtimestamp(timestamp) + timedelta(seconds=300)
         db.session.add(ConsumedCaptchaToken(signature=signature, expires_at=expires))
             
-        app.total_successes = (app.total_successes or 0) + 1
-        db.session.add(app)
-        try:
-            db.session.commit()
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to commit siteverify success: {e}")
-            db.session.rollback()
+        if not getattr(app, 'is_test', False):
+            app.total_successes = (app.total_successes or 0) + 1
+            db.session.add(app)
+            try:
+                db.session.commit()
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to commit siteverify success: {e}")
+                db.session.rollback()
             
         print(f"[CAPTCHA] Siteverify Validation [PASS] (Risk: {risk_score})")
             
@@ -589,7 +638,7 @@ def visual_verify():
     visual_ticket = data.get('visual_ticket')
     answer = data.get('answer', '')
     
-    app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+    app = get_app_by_sitekey(site_key)
     if not app:
         return jsonify({"success": False, "error": "Invalid sitekey"}), 400
         
