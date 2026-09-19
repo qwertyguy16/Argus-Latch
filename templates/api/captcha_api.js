@@ -713,11 +713,14 @@
 
                 let form = container.closest('form');
                 if (form) {
-                    let input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'argus-captcha-response';
+                    let input = form.querySelector('input[name="argus-captcha-response"]');
+                    if (!input) {
+                        input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'argus-captcha-response';
+                        form.appendChild(input);
+                    }
                     input.value = token;
-                    form.appendChild(input);
                     if (mode === 'invisible') {
                         HTMLFormElement.prototype.submit.call(form);
                     }

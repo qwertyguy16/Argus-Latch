@@ -325,25 +325,48 @@ def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, te
     from models import CaptchaLog
     from datetime import datetime
     from extensions import db
+    import json
     try:
         if telemetry is None:
             telemetry = {}
         log_entry = CaptchaLog.query.filter_by(site_key=site_key).first()
         if not log_entry:
             log_entry = CaptchaLog(site_key=site_key)
+            log_entry.risk_score = 0.0
+            log_entry.time_on_page = 0
+            log_entry.mouse_score = 0
+            log_entry.hardware_concurrency = 0
+            log_entry.device_memory = 0
+            log_entry.website_url = "[]"
             db.session.add(log_entry)
             
         log_entry.timestamp = datetime.utcnow()
         log_entry.status = status
-        log_entry.risk_score = float(f"{risk_score:.2f}")
-        log_entry.client_ip = client_ip
-        log_entry.vpn_detected = vpn_detected
-        if 'timeOnPage' in telemetry: log_entry.time_on_page = telemetry['timeOnPage']
-        if 'mouseScore' in telemetry: log_entry.mouse_score = telemetry['mouseScore']
-        if 'hardwareConcurrency' in telemetry: log_entry.hardware_concurrency = telemetry['hardwareConcurrency']
-        if 'deviceMemory' in telemetry: log_entry.device_memory = telemetry['deviceMemory']
-        if 'url' in telemetry: log_entry.website_url = telemetry['url']
-        elif not log_entry.website_url: log_entry.website_url = 'Unknown'
+        
+        # Accumulate totals
+        log_entry.hardware_concurrency = (log_entry.hardware_concurrency or 0) + 1
+        log_entry.risk_score = (log_entry.risk_score or 0.0) + float(f"{risk_score:.2f}")
+        log_entry.mouse_score = (log_entry.mouse_score or 0) + telemetry.get('mouseScore', 0)
+        log_entry.time_on_page = (log_entry.time_on_page or 0) + telemetry.get('timeOnPage', 0)
+        
+        if vpn_detected:
+            log_entry.device_memory = (log_entry.device_memory or 0) + 1
+            
+        # Update recent logs array
+        try:
+            recent_logs = json.loads(log_entry.website_url) if log_entry.website_url else []
+        except Exception:
+            recent_logs = []
+            
+        new_log = {
+            "success": status == "PASS",
+            "risk_score": float(f"{risk_score:.2f}"),
+            "ip_address": f"{client_ip.split('.')[0]}.***.***" if '.' in client_ip else "***",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        recent_logs.insert(0, new_log)
+        recent_logs = recent_logs[:10]
+        log_entry.website_url = json.dumps(recent_logs)
         
         db.session.commit()
     except Exception as e:
@@ -773,26 +796,39 @@ def get_stats():
         return jsonify({"success": False, "error": "Invalid credentials"}), 403
         
     from models import CaptchaLog
-    # Fetch up to 1000 recent logs to calculate averages
-    logs = CaptchaLog.query.filter_by(site_key=site_key).order_by("timestamp desc").limit(1000).all()
+    import json
     
-    total_logs = len(logs)
+    stats = CaptchaLog.query.filter_by(site_key=site_key).first()
+    
+    total_logs = stats.hardware_concurrency if stats and stats.hardware_concurrency else 0
+    
     if total_logs == 0:
         return jsonify({
             "success": True, 
             "global_stats": {
                 "total_challenges": app_data.total_challenges or 0,
                 "total_successes": app_data.total_successes or 0,
-                "total_failures": app_data.total_failures or 0
+                "total_failures": app_data.total_failures or 0,
+                "average_risk_score": 0.0
             },
-            "recent_stats": {}, 
+            "recent_stats": {
+                "analyzed_logs": 0,
+                "average_mouse_score": 0,
+                "average_time_on_page_ms": 0,
+                "vpn_detected_count": 0
+            }, 
             "recent_logs": []
         })
         
-    avg_risk = sum((log.risk_score or 0.0) for log in logs) / total_logs
-    avg_mouse = sum((log.mouse_score or 0) for log in logs) / total_logs
-    avg_time = sum((log.time_on_page or 0) for log in logs) / total_logs
-    vpn_count = sum(1 for log in logs if log.vpn_detected)
+    avg_risk = (stats.risk_score or 0.0) / total_logs
+    avg_mouse = (stats.mouse_score or 0) / total_logs
+    avg_time = (stats.time_on_page or 0) / total_logs
+    vpn_count = stats.device_memory or 0
+    
+    try:
+        recent_logs = json.loads(stats.website_url) if stats and stats.website_url else []
+    except Exception:
+        recent_logs = []
     
     global_stats = {
         "total_challenges": app_data.total_challenges or 0,
@@ -803,26 +839,11 @@ def get_stats():
     
     recent_stats = {
         "analyzed_logs": total_logs,
-        "average_mouse_score": round(avg_mouse, 2),
-        "average_time_on_page_ms": round(avg_time, 2),
+        "average_mouse_score": round(avg_mouse, 1),
+        "average_time_on_page_ms": round(avg_time, 0),
         "vpn_detected_count": vpn_count
     }
     
-    recent_logs = []
-    for log in logs[:10]:
-        recent_logs.append({
-            "timestamp": log.timestamp.isoformat() + "Z" if log.timestamp else None,
-            "status": log.status,
-            "risk_score": log.risk_score,
-            "client_ip": log.client_ip,
-            "vpn_detected": log.vpn_detected,
-            "time_on_page": log.time_on_page,
-            "mouse_score": log.mouse_score,
-            "hardware_concurrency": log.hardware_concurrency,
-            "device_memory": log.device_memory,
-            "website_url": log.website_url
-        })
-        
     return jsonify({
         "success": True,
         "global_stats": global_stats,
