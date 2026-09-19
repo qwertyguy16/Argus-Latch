@@ -1,4 +1,4 @@
-from extensions import db, Column, Integer, String, DateTime, Boolean, Text
+from extensions import db, Column, Integer, String, DateTime, Boolean, Text, Float
 
 class CaptchaApplication(db.Model):
     __tablename__ = 'captcha_applications'
@@ -32,3 +32,22 @@ class ConsumedCaptchaToken(db.Model):
 
     def __repr__(self):
         return f"<ConsumedCaptchaToken {self.signature}>"
+
+class CaptchaLog(db.Model):
+    __tablename__ = 'captcha_logs'
+
+    id = Integer(primary_key=True)
+    site_key = String(index=True)
+    timestamp = DateTime()
+    status = String()
+    risk_score = Float()
+    client_ip = String()
+    vpn_detected = Boolean()
+    time_on_page = Integer()
+    mouse_score = Integer()
+    hardware_concurrency = Integer()
+    device_memory = Integer()
+    website_url = Text()
+
+    def __repr__(self):
+        return f"<CaptchaLog {self.site_key} {self.status}>"

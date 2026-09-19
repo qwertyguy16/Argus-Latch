@@ -489,6 +489,29 @@ def challenge():
         from datetime import datetime
         stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
         print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
+        
+        try:
+            from models import CaptchaLog
+            log_entry = CaptchaLog(
+                site_key=site_key,
+                timestamp=datetime.utcnow(),
+                status='FAIL',
+                risk_score=float(f"{risk_score:.2f}"),
+                client_ip=client_ip,
+                vpn_detected=vpn_detected,
+                time_on_page=telemetry.get('timeOnPage'),
+                mouse_score=telemetry.get('mouseScore'),
+                hardware_concurrency=telemetry.get('hardwareConcurrency'),
+                device_memory=telemetry.get('deviceMemory'),
+                website_url=telemetry.get('url', 'Unknown')
+            )
+            db.session.add(log_entry)
+            db.session.commit()
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to commit captcha fail log: {e}")
+            db.session.rollback()
+            
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
     if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
@@ -519,6 +542,28 @@ def challenge():
     from datetime import datetime
     stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
     print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
+
+    try:
+        from models import CaptchaLog
+        log_entry = CaptchaLog(
+            site_key=site_key,
+            timestamp=datetime.utcnow(),
+            status='PASS',
+            risk_score=float(f"{risk_score:.2f}"),
+            client_ip=client_ip,
+            vpn_detected=vpn_detected,
+            time_on_page=telemetry.get('timeOnPage'),
+            mouse_score=telemetry.get('mouseScore'),
+            hardware_concurrency=telemetry.get('hardwareConcurrency'),
+            device_memory=telemetry.get('deviceMemory'),
+            website_url=telemetry.get('url', 'Unknown')
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to commit captcha pass log: {e}")
+        db.session.rollback()
 
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
@@ -727,4 +772,60 @@ def visual_verify():
     return jsonify({
         "success": True,
         "token": token
+    })
+
+@captcha_bp.route('/stats', methods=['GET'])
+def get_stats():
+    site_key = request.args.get('sitekey')
+    secret_key = request.args.get('secret')
+    
+    if not site_key or not secret_key:
+        return jsonify({"success": False, "error": "Missing credentials"}), 400
+        
+    app_data = get_app_by_sitekey(site_key)
+    if not app_data or app_data.secret_key != secret_key:
+        return jsonify({"success": False, "error": "Invalid credentials"}), 403
+        
+    from models import CaptchaLog
+    logs = CaptchaLog.query.filter_by(site_key=site_key).order_by("timestamp desc").limit(100).all()
+    
+    total_logs = len(logs)
+    if total_logs == 0:
+        return jsonify({"success": True, "stats": {}, "recent_logs": []})
+        
+    pass_count = sum(1 for log in logs if log.status == 'PASS')
+    fail_count = sum(1 for log in logs if log.status == 'FAIL')
+    
+    avg_mouse = sum((log.mouse_score or 0) for log in logs) / total_logs
+    avg_time = sum((log.time_on_page or 0) for log in logs) / total_logs
+    vpn_count = sum(1 for log in logs if log.vpn_detected)
+    
+    stats = {
+        "total_recent_challenges": total_logs,
+        "pass_rate_percent": round((pass_count / total_logs) * 100, 2),
+        "fail_rate_percent": round((fail_count / total_logs) * 100, 2),
+        "average_mouse_score": round(avg_mouse, 2),
+        "average_time_on_page_ms": round(avg_time, 2),
+        "vpn_detected_count": vpn_count
+    }
+    
+    recent_logs = []
+    for log in logs[:10]:
+        recent_logs.append({
+            "timestamp": log.timestamp.isoformat() + "Z" if log.timestamp else None,
+            "status": log.status,
+            "risk_score": log.risk_score,
+            "client_ip": log.client_ip,
+            "vpn_detected": log.vpn_detected,
+            "time_on_page": log.time_on_page,
+            "mouse_score": log.mouse_score,
+            "hardware_concurrency": log.hardware_concurrency,
+            "device_memory": log.device_memory,
+            "website_url": log.website_url
+        })
+        
+    return jsonify({
+        "success": True,
+        "stats": stats,
+        "recent_logs": recent_logs
     })

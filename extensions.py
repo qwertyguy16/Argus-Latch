@@ -28,6 +28,7 @@ class String(Column): pass
 class DateTime(Column): pass
 class Boolean(Column): pass
 class Text(Column): pass
+class Float(Column): pass
 
 class ForeignKey:
     def __init__(self, target, **kwargs):
