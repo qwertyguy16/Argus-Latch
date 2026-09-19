@@ -486,7 +486,8 @@ def challenge():
         
     risk_score = min(1.0, risk_score)
     if risk_score >= 0.85:
-        print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score})")
+        from datetime import datetime
+        print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')}")
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
     if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
@@ -514,7 +515,8 @@ def challenge():
             "risk_score": risk_score
         })
 
-    print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score})")
+    from datetime import datetime
+    print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')}")
 
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
