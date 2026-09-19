@@ -633,12 +633,13 @@ def siteverify():
         if not getattr(app, 'is_test', False):
             app.total_successes = (app.total_successes or 0) + 1
             db.session.add(app)
-            try:
-                db.session.commit()
-            except Exception as e:
-                import logging
-                logging.error(f"Failed to commit siteverify success: {e}")
-                db.session.rollback()
+            
+        try:
+            db.session.commit()
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to commit siteverify success: {e}")
+            db.session.rollback()
             
         print(f"[CAPTCHA] Siteverify Validation [PASS] (Risk: {risk_score})")
             
