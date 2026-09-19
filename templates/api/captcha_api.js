@@ -685,6 +685,8 @@
             }
 
             const injectToken = (token) => {
+                const timestamp = new Date().toISOString();
+                console.log(`[Argus Captcha] Completed at: ${timestamp} | Result: PASS | Website: ${window.location.href}`);
                 spinner.style.display = 'none';
                 box.style.display = 'none';
                 checkmark.style.display = 'block';
@@ -729,6 +731,8 @@
             };
 
             const triggerError = (msg, isFatal = false) => {
+                const timestamp = new Date().toISOString();
+                console.log(`[Argus Captcha] Completed at: ${timestamp} | Result: FAIL | Reason: ${msg} | Website: ${window.location.href}`);
                 isProcessing = false;
                 isFailed = true;
 

@@ -10,7 +10,7 @@ def build():
     # Ensure static directory exists
     os.makedirs("static", exist_ok=True)
     
-    cmd = f"javascript-obfuscator {src} --output {dest} --compact true --control-flow-flattening true --dead-code-injection true --disable-console-output true --string-array true --string-array-encoding rc4 --string-array-threshold 0.75"
+    cmd = f"javascript-obfuscator {src} --output {dest} --compact true --control-flow-flattening true --dead-code-injection true --disable-console-output false --string-array true --string-array-encoding rc4 --string-array-threshold 0.75"
     
     try:
         subprocess.run(cmd, shell=True, check=True)
