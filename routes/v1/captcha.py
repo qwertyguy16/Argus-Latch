@@ -323,6 +323,39 @@ def check_ip_vpn(client_ip):
 
 @captcha_bp.route('/challenge', methods=['POST', 'OPTIONS'])
 @limiter.limit("20 per minute")
+
+def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
+    from models import CaptchaLog
+    from datetime import datetime
+    from extensions import db
+    try:
+        if telemetry is None:
+            telemetry = {}
+        log_entry = CaptchaLog.query.filter_by(site_key=site_key).first()
+        if not log_entry:
+            log_entry = CaptchaLog(site_key=site_key)
+            db.session.add(log_entry)
+            
+        log_entry.timestamp = datetime.utcnow()
+        log_entry.status = status
+        log_entry.risk_score = float(f"{risk_score:.2f}")
+        log_entry.client_ip = client_ip
+        log_entry.vpn_detected = vpn_detected
+        if 'timeOnPage' in telemetry: log_entry.time_on_page = telemetry['timeOnPage']
+        if 'mouseScore' in telemetry: log_entry.mouse_score = telemetry['mouseScore']
+        if 'hardwareConcurrency' in telemetry: log_entry.hardware_concurrency = telemetry['hardwareConcurrency']
+        if 'deviceMemory' in telemetry: log_entry.device_memory = telemetry['deviceMemory']
+        if 'url' in telemetry: log_entry.website_url = telemetry['url']
+        elif not log_entry.website_url: log_entry.website_url = 'Unknown'
+        
+        db.session.commit()
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to upsert captcha log: {e}")
+        db.session.rollback()
+
+@captcha_bp.route('/challenge', methods=['POST', 'OPTIONS'])
+@limiter.limit("20 per minute")
 def challenge():
     """Endpoint called by the widget to obtain a token after 'solving' the captcha."""
     if request.method == 'OPTIONS':
@@ -471,6 +504,7 @@ def challenge():
         risk_score += 0.3
             
     if app.block_vpns and vpn_detected:
+        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
         return jsonify({"success": False, "error": "VPNs and Proxies are blocked by this application."}), 403
 
     # Check if Visual Challenge is required
@@ -489,28 +523,7 @@ def challenge():
         from datetime import datetime
         stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
         print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
-        
-        try:
-            from models import CaptchaLog
-            log_entry = CaptchaLog(
-                site_key=site_key,
-                timestamp=datetime.utcnow(),
-                status='FAIL',
-                risk_score=float(f"{risk_score:.2f}"),
-                client_ip=client_ip,
-                vpn_detected=vpn_detected,
-                time_on_page=telemetry.get('timeOnPage'),
-                mouse_score=telemetry.get('mouseScore'),
-                hardware_concurrency=telemetry.get('hardwareConcurrency'),
-                device_memory=telemetry.get('deviceMemory'),
-                website_url=telemetry.get('url', 'Unknown')
-            )
-            db.session.add(log_entry)
-            db.session.commit()
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to commit captcha fail log: {e}")
-            db.session.rollback()
+        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
             
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
@@ -528,6 +541,8 @@ def challenge():
         payload = f"{challenge_string}:{target_x}:{timestamp}"
         vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
         visual_ticket = f"{payload}.{vis_sig}"
+        upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            
         return jsonify({
             "success": False,
             "requires_visual": True,
@@ -542,28 +557,7 @@ def challenge():
     from datetime import datetime
     stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
     print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
-
-    try:
-        from models import CaptchaLog
-        log_entry = CaptchaLog(
-            site_key=site_key,
-            timestamp=datetime.utcnow(),
-            status='PASS',
-            risk_score=float(f"{risk_score:.2f}"),
-            client_ip=client_ip,
-            vpn_detected=vpn_detected,
-            time_on_page=telemetry.get('timeOnPage'),
-            mouse_score=telemetry.get('mouseScore'),
-            hardware_concurrency=telemetry.get('hardwareConcurrency'),
-            device_memory=telemetry.get('deviceMemory'),
-            website_url=telemetry.get('url', 'Unknown')
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-    except Exception as e:
-        import logging
-        logging.error(f"Failed to commit captcha pass log: {e}")
-        db.session.rollback()
+    upsert_captcha_log(site_key, "PASS", risk_score, client_ip, vpn_detected, telemetry)
 
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
@@ -733,12 +727,7 @@ def visual_verify():
     except Exception as ex:
         app.total_failures = (app.total_failures or 0) + 1
         db.session.add(app)
-        try:
-            db.session.commit()
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to commit visual ticket failure: {e}")
-            db.session.rollback()
+        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
         return jsonify({"success": False, "error": "Invalid ticket"}), 400
         
     # Validation for slider offset
@@ -753,12 +742,7 @@ def visual_verify():
     if not is_valid:
         app.total_failures = (app.total_failures or 0) + 1
         db.session.add(app)
-        try:
-            db.session.commit()
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to commit visual incorrect answer: {e}")
-            db.session.rollback()
+        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
         return jsonify({"success": False, "error": "Incorrect answer"}), 400
         
     risk_score = 0.35
@@ -768,6 +752,7 @@ def visual_verify():
     signature = hmac.new(app.secret_key.encode('utf-8'), message, hashlib.sha256).hexdigest()
     
     token = f"{site_key}~{timestamp}~{risk_score}.{signature}"
+    upsert_captcha_log(site_key, "PASS", risk_score, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
     
     return jsonify({
         "success": True,
