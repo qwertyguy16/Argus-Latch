@@ -787,23 +787,36 @@ def get_stats():
         return jsonify({"success": False, "error": "Invalid credentials"}), 403
         
     from models import CaptchaLog
-    logs = CaptchaLog.query.filter_by(site_key=site_key).order_by("timestamp desc").limit(100).all()
+    # Fetch up to 1000 recent logs to calculate averages
+    logs = CaptchaLog.query.filter_by(site_key=site_key).order_by("timestamp desc").limit(1000).all()
     
     total_logs = len(logs)
     if total_logs == 0:
-        return jsonify({"success": True, "stats": {}, "recent_logs": []})
+        return jsonify({
+            "success": True, 
+            "global_stats": {
+                "total_challenges": app_data.total_challenges or 0,
+                "total_successes": app_data.total_successes or 0,
+                "total_failures": app_data.total_failures or 0
+            },
+            "recent_stats": {}, 
+            "recent_logs": []
+        })
         
-    pass_count = sum(1 for log in logs if log.status == 'PASS')
-    fail_count = sum(1 for log in logs if log.status == 'FAIL')
-    
+    avg_risk = sum((log.risk_score or 0.0) for log in logs) / total_logs
     avg_mouse = sum((log.mouse_score or 0) for log in logs) / total_logs
     avg_time = sum((log.time_on_page or 0) for log in logs) / total_logs
     vpn_count = sum(1 for log in logs if log.vpn_detected)
     
-    stats = {
-        "total_recent_challenges": total_logs,
-        "pass_rate_percent": round((pass_count / total_logs) * 100, 2),
-        "fail_rate_percent": round((fail_count / total_logs) * 100, 2),
+    global_stats = {
+        "total_challenges": app_data.total_challenges or 0,
+        "total_successes": app_data.total_successes or 0,
+        "total_failures": app_data.total_failures or 0,
+        "average_risk_score": round(avg_risk, 2)
+    }
+    
+    recent_stats = {
+        "analyzed_logs": total_logs,
         "average_mouse_score": round(avg_mouse, 2),
         "average_time_on_page_ms": round(avg_time, 2),
         "vpn_detected_count": vpn_count
@@ -826,6 +839,7 @@ def get_stats():
         
     return jsonify({
         "success": True,
-        "stats": stats,
+        "global_stats": global_stats,
+        "recent_stats": recent_stats,
         "recent_logs": recent_logs
     })
