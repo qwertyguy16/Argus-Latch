@@ -603,7 +603,9 @@ def siteverify():
             raise ValueError("Site key mismatch")
             
         timestamp = int(timestamp_str)
+        import time
         if time.time() - timestamp > 300:
+            print(f"[CAPTCHA DEBUG] Token expired. Server time: {time.time()}, Token time: {timestamp}, Diff: {time.time() - timestamp}")
             return jsonify({
                 "success": False,
                 "error-codes": ["timeout-or-duplicate"]
@@ -622,6 +624,7 @@ def siteverify():
         from datetime import datetime, timedelta
         
         if ConsumedCaptchaToken.query.filter_by(signature=signature).first():
+            print(f"[CAPTCHA DEBUG] Token signature {signature} was already found in ConsumedCaptchaToken table!")
             return jsonify({
                 "success": False,
                 "error-codes": ["timeout-or-duplicate"]
