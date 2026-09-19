@@ -321,9 +321,6 @@ def check_ip_vpn(client_ip):
         pass
     return False
 
-@captcha_bp.route('/challenge', methods=['POST', 'OPTIONS'])
-@limiter.limit("20 per minute")
-
 def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
     from models import CaptchaLog
     from datetime import datetime
