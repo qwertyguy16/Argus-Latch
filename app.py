@@ -20,6 +20,9 @@ try:
 except AttributeError:
     app.config['JSON_SORT_KEYS'] = False
 
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("SQLALCHEMY_DATABASE_URI")
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 limiter.init_app(app)
 db.init_app(app)
 
