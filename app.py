@@ -70,13 +70,16 @@ if is_debug_mode:
         get_clean_env("SQLALCHEMY_DATABASE_URI_DEV")
         or get_clean_env("SQLALCHEMY_DATABASE_URI_DEVdatabase")
         or get_clean_env("SQLALCHEMY_DATABASE_URI")
+        or get_clean_env("DATABASE_URL")
     )
     db_source = "SQLALCHEMY_DATABASE_URI_DEV"
 else:
     selected_db_uri = (
         get_clean_env("SQLALCHEMY_DATABASE_URI_LIVE")
         or get_clean_env("SQLALCHEMY_DATABASE_URI")
+        or get_clean_env("DATABASE_URL")
         or get_clean_env("POSTGRES_URI")
+        or get_clean_env("POSTGRES_URL")
     )
     db_source = "SQLALCHEMY_DATABASE_URI_LIVE"
 
