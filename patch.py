@@ -65,18 +65,18 @@ content = re.sub(regex4, '\n    upsert_captcha_log(site_key, "PASS", risk_score,
 # visual_verify FAIL 1
 regex5 = r'''\s*try:\s*from models import CaptchaLog\s*client_ip = request\.headers\.get\('X-Forwarded-For', request\.remote_addr\)\s*log_entry = CaptchaLog\(\s*site_key=site_key,\s*timestamp=datetime\.utcnow\(\),\s*status='FAIL',\s*risk_score=1\.0,\s*client_ip=client_ip,\s*vpn_detected=check_ip_vpn\(client_ip\),\s*website_url='Unknown'\s*\)\s*db\.session\.add\(log_entry\)\s*db\.session\.commit\(\)\s*except Exception as e:\s*import logging\s*logging\.error\(f"Failed to commit visual ticket failure: \{e\}"\)\s*db\.session\.rollback\(\)'''
 
-content = re.sub(regex5, '\n        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))', content)
+content = re.sub(regex5, '\n        client_ip = get_client_ip()\n        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))', content)
 
 
 # visual_verify FAIL 2
 regex6 = r'''\s*try:\s*from models import CaptchaLog\s*client_ip = request\.headers\.get\('X-Forwarded-For', request\.remote_addr\)\s*log_entry = CaptchaLog\(\s*site_key=site_key,\s*timestamp=datetime\.utcnow\(\),\s*status='FAIL',\s*risk_score=1\.0,\s*client_ip=client_ip,\s*vpn_detected=check_ip_vpn\(client_ip\),\s*website_url='Unknown'\s*\)\s*db\.session\.add\(log_entry\)\s*db\.session\.commit\(\)\s*except Exception as e:\s*import logging\s*logging\.error\(f"Failed to commit visual incorrect answer: \{e\}"\)\s*db\.session\.rollback\(\)'''
 
-content = re.sub(regex6, '\n        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))', content)
+content = re.sub(regex6, '\n        client_ip = get_client_ip()\n        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))', content)
 
 # visual_verify PASS
 regex7 = r'''\s*try:\s*from models import CaptchaLog\s*client_ip = request\.headers\.get\('X-Forwarded-For', request\.remote_addr\)\s*log_entry = CaptchaLog\(\s*site_key=site_key,\s*timestamp=datetime\.utcnow\(\),\s*status='PASS',\s*risk_score=float\(f"\{risk_score:\.2f\}"\),\s*client_ip=client_ip,\s*vpn_detected=check_ip_vpn\(client_ip\),\s*website_url='Unknown'\s*\)\s*db\.session\.add\(log_entry\)\s*db\.session\.commit\(\)\s*except Exception as e:\s*import logging\s*logging\.error\(f"Failed to commit visual ticket success: \{e\}"\)\s*db\.session\.rollback\(\)'''
 
-content = re.sub(regex7, '\n    upsert_captcha_log(site_key, "PASS", risk_score, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))', content)
+content = re.sub(regex7, '\n    client_ip = get_client_ip()\n    upsert_captcha_log(site_key, "PASS", risk_score, client_ip, check_ip_vpn(client_ip))', content)
 
 # Also fix the routing decorators if the regex for challenge didn't match cleanly:
 content = content.replace('@captcha_bp.route(\'/challenge\', methods=[\'POST\', \'OPTIONS\'])\n@limiter.limit("20 per minute")\n@captcha_bp.route(\'/challenge\', methods=[\'POST\', \'OPTIONS\'])\n@limiter.limit("20 per minute")\ndef challenge():', '@captcha_bp.route(\'/challenge\', methods=[\'POST\', \'OPTIONS\'])\n@limiter.limit("20 per minute")\ndef challenge():')

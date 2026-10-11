@@ -1,10 +1,13 @@
 from flask import Blueprint, request, jsonify, render_template, make_response, url_for
 from models import CaptchaApplication
-from extensions import db, limiter
+from extensions import db, limiter, get_client_ip
 import secrets
 import time
 import math
-from datetime import datetime
+import hmac
+import hashlib
+import json
+from datetime import datetime, timedelta
 from functools import lru_cache
 
 captcha_bp = Blueprint('captcha', __name__, url_prefix='/captcha')
@@ -342,6 +345,7 @@ def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, te
             
         log_entry.timestamp = datetime.utcnow()
         log_entry.status = status
+        log_entry.client_ip = client_ip
         
         # Accumulate totals
         log_entry.hardware_concurrency = (log_entry.hardware_concurrency or 0) + 1
@@ -358,10 +362,17 @@ def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, te
         except Exception:
             recent_logs = []
             
+        if client_ip and '.' in client_ip:
+            masked_ip = f"{client_ip.split('.')[0]}.***.***"
+        elif client_ip and ':' in client_ip:
+            masked_ip = f"{client_ip.split(':')[0]}:***"
+        else:
+            masked_ip = client_ip or "***"
+
         new_log = {
             "success": status == "PASS",
             "risk_score": float(f"{risk_score:.2f}"),
-            "ip_address": f"{client_ip.split('.')[0]}.***.***" if '.' in client_ip else "***",
+            "ip_address": masked_ip,
             "timestamp": datetime.utcnow().isoformat()
         }
         recent_logs.insert(0, new_log)
@@ -506,18 +517,16 @@ def challenge():
         if nonce is None or not timestamp_pow or not hash_hex:
             risk_score += 1.0
         else:
-            import time
             if (time.time() * 1000) - timestamp_pow > 300000: # 5 minutes old
                 risk_score += 1.0
             else:
-                import hashlib
                 msg = f"{site_key}{timestamp_pow}{nonce}".encode('utf-8')
                 expected_hash = hashlib.sha256(msg).hexdigest()
                 if expected_hash != hash_hex or not hash_hex.startswith("0000"):
                     risk_score += 1.0
 
     # 3. Intelligence: VPN & Datacenter IP Detection
-    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    client_ip = get_client_ip()
     vpn_detected = check_ip_vpn(client_ip)
     
     if vpn_detected:
@@ -549,9 +558,6 @@ def challenge():
 
     if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
         requires_visual = True
-        
-    import hmac
-    import hashlib
     
     if requires_visual:
         bg_b64, piece_b64, target_x, target_y = generate_slider_challenge()
@@ -626,16 +632,12 @@ def siteverify():
             raise ValueError("Site key mismatch")
             
         timestamp = int(timestamp_str)
-        import time
         if time.time() - timestamp > 300:
             print(f"[CAPTCHA DEBUG] Token expired. Server time: {time.time()}, Token time: {timestamp}, Diff: {time.time() - timestamp}")
             return jsonify({
                 "success": False,
                 "error-codes": ["timeout-or-duplicate"]
             }), 400
-            
-        import hmac
-        import hashlib
         
         message = f"{app.site_key}:{timestamp_str}:{risk_score}".encode('utf-8')
         expected_signature = hmac.new(app.secret_key.encode('utf-8'), message, hashlib.sha256).hexdigest()
@@ -715,9 +717,6 @@ def visual_verify():
     if not visual_ticket or not answer:
         return jsonify({"success": False, "error": "Missing parameters"}), 400
         
-    import hmac
-    import hashlib
-    
     try:
         challenge_string, rest = visual_ticket.split(':', 1)
         payload_body, vis_sig = rest.rsplit('.', 1)
@@ -726,7 +725,6 @@ def visual_verify():
         if ':' in payload_body:
             expected_ans, timestamp_str = payload_body.split(':')
             timestamp = int(timestamp_str)
-            import time
             if time.time() - timestamp > 300:
                 raise ValueError("Ticket expired")
             payload = f"{challenge_string}:{expected_ans}:{timestamp_str}"
@@ -750,8 +748,10 @@ def visual_verify():
             
     except Exception as ex:
         app.total_failures = (app.total_failures or 0) + 1
-        db.session.add(app)
-        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
+        if not getattr(app, 'is_test', False):
+            db.session.add(app)
+        client_ip = get_client_ip()
+        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))
         return jsonify({"success": False, "error": "Invalid ticket"}), 400
         
     # Validation for slider offset
@@ -765,18 +765,20 @@ def visual_verify():
         
     if not is_valid:
         app.total_failures = (app.total_failures or 0) + 1
-        db.session.add(app)
-        upsert_captcha_log(site_key, "FAIL", 1.0, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
+        if not getattr(app, 'is_test', False):
+            db.session.add(app)
+        client_ip = get_client_ip()
+        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))
         return jsonify({"success": False, "error": "Incorrect answer"}), 400
         
     risk_score = 0.35
-    import time
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
     signature = hmac.new(app.secret_key.encode('utf-8'), message, hashlib.sha256).hexdigest()
     
     token = f"{site_key}~{timestamp}~{risk_score}.{signature}"
-    upsert_captcha_log(site_key, "PASS", risk_score, request.headers.get("X-Forwarded-For", request.remote_addr), check_ip_vpn(request.headers.get("X-Forwarded-For", request.remote_addr)))
+    client_ip = get_client_ip()
+    upsert_captcha_log(site_key, "PASS", risk_score, client_ip, check_ip_vpn(client_ip))
     
     return jsonify({
         "success": True,

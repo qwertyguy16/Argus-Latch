@@ -8,3 +8,4 @@ waitress
 Flask-SQLAlchemy
 Pillow
 pymysql
+psycopg2-binary
