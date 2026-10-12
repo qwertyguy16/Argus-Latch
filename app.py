@@ -62,43 +62,56 @@ def get_clean_env(key):
             return val
     return None
 
+from db_failover import failover_manager, is_connection_or_operational_error
+
 # Database URI selection based on debug mode:
 # If Flask debug is True -> use DEV database URI
 # If Flask debug is False -> use LIVE database URI
 if is_debug_mode:
-    selected_db_uri = (
+    primary_db_uri = (
         get_clean_env("SQLALCHEMY_DATABASE_URI_DEV")
         or get_clean_env("SQLALCHEMY_DATABASE_URI_DEVdatabase")
         or get_clean_env("SQLALCHEMY_DATABASE_URI")
         or get_clean_env("DATABASE_URL")
     )
+    fallback_db_uri = (
+        get_clean_env("SQLALCHEMY_DATABASE_URI_DEV_FALLBACK")
+        or get_clean_env("SQLALCHEMY_DATABASE_URI_LIVE_FALLBACK")
+    )
     db_source = "SQLALCHEMY_DATABASE_URI_DEV"
 else:
-    selected_db_uri = (
+    primary_db_uri = (
         get_clean_env("SQLALCHEMY_DATABASE_URI_LIVE")
         or get_clean_env("SQLALCHEMY_DATABASE_URI")
         or get_clean_env("DATABASE_URL")
         or get_clean_env("POSTGRES_URI")
         or get_clean_env("POSTGRES_URL")
     )
+    fallback_db_uri = get_clean_env("SQLALCHEMY_DATABASE_URI_LIVE_FALLBACK")
     db_source = "SQLALCHEMY_DATABASE_URI_LIVE"
 
-# Normalize PostgreSQL URI prefix if needed (postgres:// -> postgresql+psycopg2://)
-if selected_db_uri:
-    if selected_db_uri.startswith("postgres://"):
-        selected_db_uri = selected_db_uri.replace("postgres://", "postgresql+psycopg2://", 1)
-    elif selected_db_uri.startswith("postgresql://") and not selected_db_uri.startswith("postgresql+"):
-        selected_db_uri = selected_db_uri.replace("postgresql://", "postgresql+psycopg2://", 1)
+app.logger.info(f"Database mode: {'DEVELOPMENT (DEBUG)' if is_debug_mode else 'PRODUCTION (LIVE)'} | Target: {db_source}")
 
-app.logger.info(f"Database mode: {'DEVELOPMENT (DEBUG)' if is_debug_mode else 'PRODUCTION (LIVE)'} | Using: {db_source}")
-
-app.config['SQLALCHEMY_DATABASE_URI'] = selected_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Initialize automatic connection fallback, write-safety system, and SQLAlchemy
+failover_manager.init_app(app, db, primary_uri=primary_db_uri, fallback_uri=fallback_db_uri)
+
 limiter.init_app(app)
-db.init_app(app)
 
 app.register_blueprint(captcha_bp, url_prefix='/v1/captcha')
+
+@app.route('/v1/db/status', methods=['GET'])
+def db_status():
+    """Return current database connection status, active node, and failover diagnostics."""
+    return jsonify(failover_manager.get_status()), 200
+
+@app.route('/v1/db/recover', methods=['POST'])
+def db_recover():
+    """Explicit health-recovery check to restore connection to primary if healthy."""
+    result = failover_manager.check_and_recover_primary()
+    code = 200 if result.get("success") else 503
+    return jsonify(result), code
 
 @app.after_request
 def log_request(response):
@@ -118,6 +131,10 @@ def handle_exception(e):
             "code": e.code,
             "message": e.description
         }), e.code
+
+    if not failover_manager.is_fallback and is_connection_or_operational_error(e):
+        app.logger.warning(f"Connection/operational error intercepted in exception handler: {e}. Initiating sticky failover.")
+        failover_manager.failover_to_fallback(reason=str(e))
 
     import traceback
     traceback.print_exc()
