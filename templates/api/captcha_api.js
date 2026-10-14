@@ -996,6 +996,124 @@
 
                         visualContainer.innerHTML = ''; // clear
 
+                        const renderAudioError = (errorMsg) => {
+                            visualContainer.innerHTML = '';
+                            renderModalHeader("Audio Challenge", "Accessibility verification", 'visual', () => {
+                                isProcessing = false;
+                                visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                                visualContainer.style.opacity = '0';
+                                visualContainer.style.transform = 'scale(0.97)';
+                                setTimeout(() => {
+                                    executeChallenge();
+                                    visualContainer.style.opacity = '1';
+                                    visualContainer.style.transform = 'scale(1)';
+                                }, 150);
+                            });
+
+                            const errBox = document.createElement('div');
+                            errBox.style.cssText = `
+                                padding: 24px 16px;
+                                text-align: center;
+                                font-family: inherit;
+                                box-sizing: border-box;
+                            `;
+
+                            const iconDiv = document.createElement('div');
+                            iconDiv.style.cssText = `
+                                width: 44px;
+                                height: 44px;
+                                margin: 0 auto 12px auto;
+                                border-radius: 50%;
+                                background: rgba(239, 68, 68, 0.12);
+                                color: #ef4444;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                            `;
+                            iconDiv.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="8"></circle><line x1="12" y1="7" x2="12" y2="11"></line><line x1="12" y1="14" x2="12.01" y2="14"></line></svg>`;
+
+                            const msgDiv = document.createElement('div');
+                            msgDiv.style.cssText = `
+                                font-size: 14px;
+                                color: ${colors.text};
+                                font-weight: 600;
+                                margin-bottom: 6px;
+                            `;
+                            msgDiv.innerText = errorMsg || "Failed to load audio challenge";
+
+                            const subDiv = document.createElement('div');
+                            subDiv.style.cssText = `
+                                font-size: 12.5px;
+                                color: ${colors.subText};
+                                margin-bottom: 20px;
+                            `;
+                            subDiv.innerText = "You can retry loading audio or return to visual verification.";
+
+                            const btnRow = document.createElement('div');
+                            btnRow.style.cssText = `
+                                display: flex;
+                                gap: 10px;
+                                justify-content: center;
+                            `;
+
+                            const retryBtn = document.createElement('button');
+                            retryBtn.type = 'button';
+                            retryBtn.innerText = 'Retry Audio';
+                            retryBtn.style.cssText = `
+                                flex: 1;
+                                padding: 10px 14px;
+                                background: #3b82f6;
+                                color: white;
+                                border: none;
+                                border-radius: 8px;
+                                font-size: 13.5px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                transition: background 0.2s;
+                            `;
+                            retryBtn.onmouseover = () => { retryBtn.style.background = '#2563eb'; };
+                            retryBtn.onmouseout = () => { retryBtn.style.background = '#3b82f6'; };
+                            retryBtn.onclick = () => { onSwitchToAudio(); };
+
+                            const backBtn = document.createElement('button');
+                            backBtn.type = 'button';
+                            backBtn.innerText = 'Back to Visual';
+                            backBtn.style.cssText = `
+                                flex: 1;
+                                padding: 10px 14px;
+                                background: ${colors.boxBg};
+                                color: ${colors.text};
+                                border: 1px solid ${colors.boxBorder};
+                                border-radius: 8px;
+                                font-size: 13.5px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                transition: background 0.2s, border-color 0.2s;
+                            `;
+                            backBtn.onmouseover = () => { backBtn.style.borderColor = '#3b82f6'; };
+                            backBtn.onmouseout = () => { backBtn.style.borderColor = colors.boxBorder; };
+                            backBtn.onclick = () => {
+                                isProcessing = false;
+                                visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                                visualContainer.style.opacity = '0';
+                                visualContainer.style.transform = 'scale(0.97)';
+                                setTimeout(() => {
+                                    executeChallenge();
+                                    visualContainer.style.opacity = '1';
+                                    visualContainer.style.transform = 'scale(1)';
+                                }, 150);
+                            };
+
+                            btnRow.appendChild(retryBtn);
+                            btnRow.appendChild(backBtn);
+
+                            errBox.appendChild(iconDiv);
+                            errBox.appendChild(msgDiv);
+                            errBox.appendChild(subDiv);
+                            errBox.appendChild(btnRow);
+                            visualContainer.appendChild(errBox);
+                        };
+
                         const onSwitchToAudio = async () => {
                             visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
                             visualContainer.style.opacity = '0';
@@ -1021,10 +1139,10 @@
                                             visualContainer.style.transform = 'scale(1)';
                                         }, 120);
                                     } else {
-                                        triggerError(aData.error || 'Failed to load audio', false);
+                                        renderAudioError(aData.error || 'Failed to load audio challenge');
                                     }
                                 } catch (e) {
-                                    triggerError('Failed to load audio', false);
+                                    renderAudioError('Network error loading audio challenge');
                                 }
                             }, 150);
                         };

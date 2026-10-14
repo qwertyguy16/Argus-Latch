@@ -38,18 +38,75 @@ class MockTestApp:
         self.test_type = test_type
 
 def get_app_by_sitekey(site_key):
+    if not site_key:
+        return None
+    site_key = site_key.strip()
     if site_key in TEST_KEYS:
         data = TEST_KEYS[site_key]
         return MockTestApp(site_key, data['secret'], data['type'])
-    return CaptchaApplication.query.filter_by(site_key=site_key).first()
+    try:
+        return CaptchaApplication.query.filter_by(site_key=site_key).first()
+    except Exception as e:
+        import logging
+        logging.error(f"Error querying CaptchaApplication by site_key '{site_key}': {e}")
+        return None
 
 def get_app_by_secret(secret_key):
+    if not secret_key:
+        return None
+    secret_key = secret_key.strip()
     for sk, data in TEST_KEYS.items():
         if data['secret'] == secret_key:
             return MockTestApp(sk, secret_key, data['type'])
-    return CaptchaApplication.query.filter_by(secret_key=secret_key).first()
+    try:
+        return CaptchaApplication.query.filter_by(secret_key=secret_key).first()
+    except Exception as e:
+        import logging
+        logging.error(f"Error querying CaptchaApplication by secret_key: {e}")
+        return None
 
-def generate_visual_challenge():
+def is_domain_authorized(app_domains, request):
+    if not app_domains:
+        return True
+    from urllib.parse import urlparse
+    allowed_domains = set()
+    for d in app_domains.split(','):
+        d_clean = d.strip().lower()
+        if not d_clean:
+            continue
+        allowed_domains.add(d_clean)
+        try:
+            parsed_d = urlparse(d_clean if '//' in d_clean else f'//{d_clean}')
+            if parsed_d.hostname:
+                allowed_domains.add(parsed_d.hostname.lower())
+        except Exception:
+            pass
+
+    if not allowed_domains:
+        return True
+
+    origin = request.headers.get('Origin')
+    referer = request.headers.get('Referer')
+    request_domain = ""
+    if origin and origin != 'null':
+        try:
+            request_domain = (urlparse(origin).hostname or "").lower()
+        except Exception:
+            pass
+    elif referer:
+        try:
+            request_domain = (urlparse(referer).hostname or "").lower()
+        except Exception:
+            pass
+
+    if not request_domain:
+        return True
+
+    return (
+        request_domain in allowed_domains
+        or f"www.{request_domain}" in allowed_domains
+        or request_domain.replace('www.', '') in allowed_domains
+    )
     import io
     import base64
     import random
@@ -495,22 +552,6 @@ def get_settings():
     # Tell the browser to cache this for 5 minutes (drastically speeds up repeat page loads)
     response.headers['Cache-Control'] = 'public, max-age=300'
     return response
-
-def is_domain_authorized(app_domains, request):
-    if not app_domains:
-        return True
-    allowed_domains = [d.strip() for d in app_domains.split(',') if d.strip()]
-    if not allowed_domains:
-        return True
-    origin = request.headers.get('Origin')
-    referer = request.headers.get('Referer')
-    request_domain = ""
-    from urllib.parse import urlparse
-    if origin:
-        request_domain = urlparse(origin).hostname
-    elif referer:
-        request_domain = urlparse(referer).hostname
-    return request_domain in allowed_domains
 
 @captcha_bp.after_request
 def add_cors_headers(response):
@@ -985,25 +1026,34 @@ def audio_challenge():
     if not is_domain_authorized(app.domains, request):
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
 
-    digits_str, audio_b64 = generate_audio_challenge()
-    timestamp = str(int(time.time()))
-    challenge_string = secrets.token_hex(8)
-    payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
-    vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-    visual_ticket = f"{payload}.{vis_sig}"
+    try:
+        digits_str, audio_b64 = generate_audio_challenge()
+        timestamp = str(int(time.time()))
+        challenge_string = secrets.token_hex(8)
+        payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
+        vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+        visual_ticket = f"{payload}.{vis_sig}"
 
-    client_ip = get_client_ip()
-    upsert_captcha_log(site_key, "CHALLENGE", 0.5, client_ip, check_ip_vpn(client_ip))
+        client_ip = get_client_ip()
+        try:
+            upsert_captcha_log(site_key, "CHALLENGE", 0.5, client_ip, check_ip_vpn(client_ip))
+        except Exception as log_err:
+            import logging
+            logging.warning(f"[CAPTCHA] Log upsert error: {log_err}")
 
-    return jsonify({
-        "success": False,
-        "requires_visual": True,
-        "visual_type": "audio",
-        "audio_only": False,
-        "audio": audio_b64,
-        "visual_ticket": visual_ticket,
-        "risk_score": 0.5
-    })
+        return jsonify({
+            "success": False,
+            "requires_visual": True,
+            "visual_type": "audio",
+            "audio_only": False,
+            "audio": audio_b64,
+            "visual_ticket": visual_ticket,
+            "risk_score": 0.5
+        })
+    except Exception as e:
+        import logging
+        logging.error(f"[CAPTCHA] Audio challenge generation error: {e}")
+        return jsonify({"success": False, "error": "Failed to generate audio challenge"}), 500
 
 @captcha_bp.route('/visual-verify', methods=['POST', 'OPTIONS'])
 @limiter.limit("20 per minute")
