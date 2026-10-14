@@ -15,7 +15,10 @@ captcha_bp = Blueprint('captcha', __name__, url_prefix='/captcha')
 TEST_KEYS = {
     'argus_1x000000000000000000000000': {'secret': 'sk_1x000000000000000000000000', 'type': 'pass'},
     'argus_2x000000000000000000000000': {'secret': 'sk_2x000000000000000000000000', 'type': 'fail'},
-    'argus_3x000000000000000000000000': {'secret': 'sk_3x000000000000000000000000', 'type': 'auto'}
+    'argus_3x000000000000000000000000': {'secret': 'sk_3x000000000000000000000000', 'type': 'auto'},
+    'argus_4x000000000000000000000000': {'secret': 'sk_4x000000000000000000000000', 'type': 'slider'},
+    'argus_5x000000000000000000000000': {'secret': 'sk_5x000000000000000000000000', 'type': 'rotation'},
+    'argus_6x000000000000000000000000': {'secret': 'sk_6x000000000000000000000000', 'type': 'audio'}
 }
 
 class MockTestApp:
@@ -202,6 +205,216 @@ def generate_slider_challenge():
     piece_b64 = base64.b64encode(piece_buf.getvalue()).decode('utf-8')
     
     return bg_b64, piece_b64, target_x, target_y
+
+def generate_rotation_challenge():
+    import io
+    import base64
+    import random
+    from PIL import Image, ImageDraw
+
+    objects = ['house', 'sailboat', 'rocket', 'coffee', 'tree', 'umbrella', 'car']
+    obj = random.choice(objects)
+    size = 400
+    cx, cy = size // 2, size // 2
+
+    img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+    d = ImageDraw.Draw(img)
+    # Background circular card
+    d.ellipse((25, 25, size - 25, size - 25), fill=(245, 248, 252, 255), outline=(203, 213, 225, 255), width=6)
+
+    if obj == 'house':
+        d.rectangle([cx - 70, cy - 10, cx + 70, cy + 90], fill=(254, 243, 199, 255), outline=(217, 119, 6, 255), width=4)
+        d.polygon([(cx - 90, cy - 10), (cx, cy - 100), (cx + 90, cy - 10)], fill=(220, 38, 38, 255), outline=(153, 27, 27, 255))
+        d.rectangle([cx + 35, cy - 90, cx + 65, cy - 40], fill=(185, 28, 28, 255), outline=(153, 27, 27, 255), width=3)
+        d.ellipse([cx + 42, cy - 110, cx + 58, cy - 95], fill=(203, 213, 225, 180))
+        d.ellipse([cx + 50, cy - 128, cx + 72, cy - 110], fill=(203, 213, 225, 160))
+        d.rounded_rectangle([cx - 20, cy + 30, cx + 20, cy + 90], radius=5, fill=(120, 53, 15, 255))
+        d.ellipse([cx + 8, cy + 60, cx + 16, cy + 68], fill=(251, 191, 36, 255))
+        d.rectangle([cx - 55, cy + 15, cx - 25, cy + 45], fill=(186, 230, 253, 255), outline=(56, 189, 248, 255), width=3)
+        d.rounded_rectangle([cx - 100, cy + 90, cx + 100, cy + 105], radius=6, fill=(34, 197, 94, 255))
+
+    elif obj == 'sailboat':
+        d.rounded_rectangle([cx - 120, cy + 65, cx + 120, cy + 95], radius=10, fill=(59, 130, 246, 200))
+        d.rounded_rectangle([cx - 100, cy + 85, cx + 100, cy + 105], radius=10, fill=(37, 99, 235, 220))
+        d.polygon([(cx - 80, cy + 25), (cx + 80, cy + 25), (cx + 55, cy + 65), (cx - 55, cy + 65)], fill=(180, 83, 9, 255), outline=(120, 53, 15, 255))
+        d.rectangle([cx - 4, cy - 110, cx + 4, cy + 25], fill=(100, 116, 139, 255))
+        d.polygon([(cx + 6, cy - 100), (cx + 6, cy + 15), (cx + 75, cy + 15)], fill=(255, 255, 255, 255), outline=(203, 213, 225, 255), width=3)
+        d.polygon([(cx - 6, cy - 75), (cx - 6, cy + 15), (cx - 60, cy + 15)], fill=(241, 245, 249, 255), outline=(203, 213, 225, 255), width=3)
+        d.polygon([(cx, cy - 110), (cx + 30, cy - 102), (cx, cy - 95)], fill=(239, 68, 68, 255))
+
+    elif obj == 'rocket':
+        d.polygon([(cx - 20, cy + 55), (cx + 20, cy + 55), (cx, cy + 120)], fill=(245, 158, 11, 255))
+        d.polygon([(cx - 10, cy + 55), (cx + 10, cy + 55), (cx, cy + 95)], fill=(254, 240, 138, 255))
+        d.polygon([(cx - 30, cy + 20), (cx - 75, cy + 65), (cx - 30, cy + 60)], fill=(220, 38, 38, 255))
+        d.polygon([(cx + 30, cy + 20), (cx + 75, cy + 65), (cx + 30, cy + 60)], fill=(220, 38, 38, 255))
+        d.rounded_rectangle([cx - 32, cy - 35, cx + 32, cy + 60], radius=16, fill=(248, 250, 252, 255), outline=(148, 163, 184, 255), width=4)
+        d.polygon([(cx - 32, cy - 30), (cx, cy - 115), (cx + 32, cy - 30)], fill=(220, 38, 38, 255), outline=(153, 27, 27, 255), width=3)
+        d.ellipse([cx - 16, cy - 10, cx + 16, cy + 22], fill=(14, 165, 233, 255), outline=(203, 213, 225, 255), width=4)
+        d.ellipse([cx - 6, cy - 4, cx + 2, cy + 4], fill=(255, 255, 255, 200))
+
+    elif obj == 'coffee':
+        d.ellipse([cx - 85, cy + 60, cx + 85, cy + 85], fill=(226, 232, 240, 255), outline=(148, 163, 184, 255), width=4)
+        d.rounded_rectangle([cx - 60, cy - 25, cx + 45, cy + 68], radius=22, fill=(168, 85, 247, 255), outline=(126, 34, 206, 255), width=4)
+        d.arc([cx + 25, cy - 10, cx + 80, cy + 45], start=-90, end=90, fill=(126, 34, 206, 255), width=10)
+        d.ellipse([cx - 56, cy - 28, cx + 41, cy - 14], fill=(120, 53, 15, 255))
+        for offset_x in [-25, 0, 20]:
+            d.arc([cx + offset_x - 15, cy - 90, cx + offset_x + 15, cy - 40], start=-60, end=120, fill=(148, 163, 184, 160), width=4)
+
+    elif obj == 'tree':
+        d.rounded_rectangle([cx - 95, cy + 80, cx + 95, cy + 100], radius=8, fill=(101, 163, 13, 255))
+        d.polygon([(cx - 16, cy - 10), (cx + 16, cy - 10), (cx + 26, cy + 85), (cx - 26, cy + 85)], fill=(120, 53, 15, 255))
+        d.ellipse([cx - 85, cy - 65, cx - 10, cy + 15], fill=(22, 163, 74, 255))
+        d.ellipse([cx + 10, cy - 65, cx + 85, cy + 15], fill=(22, 163, 74, 255))
+        d.ellipse([cx - 65, cy - 110, cx + 65, cy - 10], fill=(34, 197, 94, 255))
+        for ax, ay in [(cx - 35, cy - 40), (cx + 25, cy - 45), (cx - 5, cy - 80), (cx + 35, cy - 15), (cx - 45, cy - 10)]:
+            d.ellipse([ax - 7, ay - 7, ax + 7, ay + 7], fill=(239, 68, 68, 255))
+
+    elif obj == 'umbrella':
+        for dx, dy in [(-70, -30), (70, -20), (-85, 30), (80, 40), (-60, 70), (70, 80)]:
+            d.ellipse([cx + dx, cy + dy, cx + dx + 6, cy + dy + 12], fill=(96, 165, 250, 200))
+        d.pieslice([cx - 95, cy - 90, cx + 95, cy + 30], start=180, end=360, fill=(239, 68, 68, 255), outline=(185, 28, 28, 255), width=4)
+        d.pieslice([cx - 95, cy - 90, cx + 95, cy + 30], start=225, end=315, fill=(245, 158, 11, 255))
+        d.rectangle([cx - 3, cy - 102, cx + 3, cy - 88], fill=(148, 163, 184, 255))
+        d.rectangle([cx - 4, cy - 30, cx + 4, cy + 60], fill=(71, 85, 105, 255))
+        d.arc([cx - 24, cy + 45, cx + 4, cy + 85], start=0, end=180, fill=(71, 85, 105, 255), width=8)
+
+    elif obj == 'car':
+        d.rounded_rectangle([cx - 110, cy + 70, cx + 110, cy + 85], radius=6, fill=(100, 116, 139, 255))
+        d.rounded_rectangle([cx - 85, cy + 15, cx + 85, cy + 55], radius=10, fill=(239, 68, 68, 255), outline=(185, 28, 28, 255), width=3)
+        d.polygon([(cx - 55, cy + 15), (cx - 35, cy - 30), (cx + 35, cy - 30), (cx + 60, cy + 15)], fill=(220, 38, 38, 255), outline=(185, 28, 28, 255), width=3)
+        d.polygon([(cx - 30, cy - 25), (cx - 5, cy - 25), (cx - 5, cy + 12), (cx - 45, cy + 12)], fill=(186, 230, 253, 255))
+        d.polygon([(cx + 5, cy - 25), (cx + 28, cy - 25), (cx + 48, cy + 12), (cx + 5, cy + 12)], fill=(186, 230, 253, 255))
+        d.rounded_rectangle([cx + 78, cy + 22, cx + 87, cy + 34], radius=3, fill=(254, 240, 138, 255))
+        for wx in [cx - 50, cx + 50]:
+            d.ellipse([wx - 22, cy + 40, wx + 22, cy + 78], fill=(30, 41, 59, 255), outline=(15, 23, 42, 255), width=3)
+            d.ellipse([wx - 10, cy + 50, wx + 10, cy + 68], fill=(203, 213, 225, 255))
+
+    target_angle = random.choice([30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330])
+    # Rotate clockwise by target_angle (PIL rotate angle is counter-clockwise, so use -target_angle)
+    rotated_img = img.rotate(-target_angle, resample=Image.Resampling.BICUBIC)
+    final_img = rotated_img.resize((240, 240), Image.Resampling.LANCZOS)
+
+    buf = io.BytesIO()
+    final_img.save(buf, format='PNG')
+    img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+    return img_b64, target_angle
+
+def generate_audio_challenge():
+    import os
+    import io
+    import wave
+    import random
+    import base64
+    import numpy as np
+    from flask import current_app
+
+    # 4 to 6 random digits
+    num_digits = random.randint(4, 6)
+    digits = [random.randint(0, 9) for _ in range(num_digits)]
+    digits_str = ''.join(str(d) for d in digits)
+
+    samples_dir = os.path.join(current_app.root_path, 'audio_samples')
+    rate = 22050
+
+    combined = []
+    # Initial pause
+    combined.append(np.zeros(int(rate * random.uniform(0.2, 0.35)), dtype=np.int16))
+
+    for i, d in enumerate(digits):
+        path = os.path.join(samples_dir, f'digit_{d}.wav')
+        if os.path.exists(path):
+            with wave.open(path, 'rb') as w:
+                data = w.readframes(w.getnframes())
+                arr = np.frombuffer(data, dtype=np.int16).copy()
+
+                # Micro-jitter: slight speed/duration variation (0.93 - 1.07)
+                resample_ratio = random.uniform(0.93, 1.07)
+                new_len = int(len(arr) * resample_ratio)
+                indices = np.linspace(0, len(arr) - 1, new_len)
+                arr = np.interp(indices, np.arange(len(arr)), arr).astype(np.float32)
+
+                # Individual digit volume variation (0.80 - 1.15)
+                vol_gain = random.uniform(0.80, 1.15)
+                arr = np.clip(arr * vol_gain, -32767, 32767).astype(np.int16)
+                combined.append(arr)
+        else:
+            freq = 400 + d * 80
+            dur = random.uniform(0.35, 0.45)
+            t = np.linspace(0, dur, int(rate * dur), endpoint=False)
+            tone = (16000 * np.sin(2 * np.pi * freq * t)).astype(np.int16)
+            combined.append(tone)
+
+        # Varied pause between digits (0.22s to 0.42s)
+        if i < len(digits) - 1:
+            pause_frames = int(rate * random.uniform(0.22, 0.42))
+            combined.append(np.zeros(pause_frames, dtype=np.int16))
+
+    # Trailing pause
+    combined.append(np.zeros(int(rate * random.uniform(0.25, 0.4)), dtype=np.int16))
+    full_audio = np.concatenate(combined).astype(np.float32)
+
+    total_len = len(full_audio)
+    t = np.arange(total_len) / rate
+
+    # 1. Multi-layered Acoustic Static / Radio Noise (challenging for Whisper/ASR)
+    # White noise (RF static / atmospheric hiss):
+    white_noise = np.random.normal(0, 2800, total_len).astype(np.float32)
+    # Moving average for pink/brown low-pass rumble (chassis/ambient room rumble):
+    kernel_size = 11
+    kernel = np.ones(kernel_size) / kernel_size
+    brown_rumble = np.convolve(np.random.normal(0, 3600, total_len + kernel_size - 1), kernel, mode='valid')
+
+    # 2. Power Line Hum & Harmonics (60Hz, 120Hz, 180Hz)
+    hum = (
+        1200 * np.sin(2 * np.pi * 60 * t) +
+        600 * np.sin(2 * np.pi * 120 * t + 0.4) +
+        300 * np.sin(2 * np.pi * 180 * t + 0.8)
+    )
+
+    # 3. Dynamic FM Sweep / Acoustic Warble (interferes with Mel filterbanks)
+    sweep_rate = random.uniform(0.3, 0.6)
+    fm_center = random.uniform(340, 460)
+    sweep = 1100 * np.sin(2 * np.pi * (fm_center + 70 * np.sin(2 * np.pi * sweep_rate * t)) * t)
+
+    # 4. Vinyl crackle / acoustic pops (sporadic impulse interference)
+    crackles = np.zeros(total_len, dtype=np.float32)
+    num_pops = random.randint(40, 70)
+    pop_indices = np.random.randint(0, total_len, size=num_pops)
+    pop_amps = np.random.uniform(7000, 14000, size=num_pops) * np.random.choice([-1, 1], size=num_pops)
+    crackles[pop_indices] = pop_amps
+
+    # 5. Background Voice Murmur (cocktail party defense)
+    try:
+        murmur_samples = []
+        for _ in range(3):
+            rnd_d = random.randint(0, 9)
+            m_path = os.path.join(samples_dir, f'digit_{rnd_d}.wav')
+            if os.path.exists(m_path):
+                with wave.open(m_path, 'rb') as mw:
+                    m_data = mw.readframes(mw.getnframes())
+                    m_arr = np.frombuffer(m_data, dtype=np.int16)[::-1].astype(np.float32) * 0.22
+                    murmur_samples.append(m_arr)
+        if murmur_samples:
+            murmur_full = np.tile(np.concatenate(murmur_samples), int(np.ceil(total_len / sum(len(x) for x in murmur_samples)) + 1))[:total_len]
+        else:
+            murmur_full = np.zeros(total_len, dtype=np.float32)
+    except Exception:
+        murmur_full = np.zeros(total_len, dtype=np.float32)
+
+    # Mix speech signal with composite noise defenses
+    mixed = full_audio + white_noise + brown_rumble + hum + sweep + crackles + murmur_full
+    final_pcm = np.clip(mixed, -32767, 32767).astype(np.int16)
+
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as out_w:
+        out_w.setnchannels(1)
+        out_w.setsampwidth(2)
+        out_w.setframerate(rate)
+        out_w.writeframes(final_pcm.tobytes())
+
+    audio_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    return digits_str, audio_b64
 
 
 import os
@@ -545,6 +758,15 @@ def challenge():
             requires_visual = False
         elif app.test_type == 'fail':
             risk_score = 1.0
+        elif app.test_type == 'slider':
+            risk_score = 0.45
+            requires_visual = True
+        elif app.test_type == 'rotation':
+            risk_score = 0.65
+            requires_visual = True
+        elif app.test_type == 'audio':
+            risk_score = 0.75
+            requires_visual = True
         # 'auto' continues normally
         
     risk_score = min(1.0, risk_score)
@@ -556,29 +778,81 @@ def challenge():
             
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
 
-    if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.4:
+    if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.35:
         requires_visual = True
     
     if requires_visual:
-        bg_b64, piece_b64, target_x, target_y = generate_slider_challenge()
+        # Determine challenge type based on client suspicion level:
+        # - Low suspicion (risk < 0.35): Seamless pass
+        # - Mild suspicion (0.35 <= risk < 0.55): Interactive Slider challenge (with accessibility audio option)
+        # - Moderate suspicion (0.55 <= risk < 0.70): Image Rotation challenge (with accessibility audio option)
+        # - High suspicion (0.70 <= risk < 0.85) or under_attack_mode: Mandatory Audio-Only challenge (for sus clients)
+        # - Extreme suspicion (risk >= 0.85): Immediate block (403)
+        forced_challenge = telemetry.get('forceChallenge')
+        if getattr(app, 'is_test', False) and app.test_type in ['slider', 'rotation', 'audio']:
+            challenge_type = app.test_type
+        elif forced_challenge in ['slider', 'rotation', 'audio']:
+            challenge_type = forced_challenge
+        elif telemetry.get('audio'):
+            challenge_type = 'audio'
+        elif getattr(app, 'under_attack_mode', False) or risk_score >= 0.70:
+            challenge_type = 'audio'
+        elif risk_score >= 0.55:
+            challenge_type = 'rotation'
+        else:
+            challenge_type = 'slider'
+
         timestamp = str(int(time.time()))
         challenge_string = secrets.token_hex(8)
-        # We store the target_x as the answer
-        payload = f"{challenge_string}:{target_x}:{timestamp}"
-        vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-        visual_ticket = f"{payload}.{vis_sig}"
-        upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+
+        if challenge_type == 'audio':
+            digits_str, audio_b64 = generate_audio_challenge()
+            payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
+            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+            visual_ticket = f"{payload}.{vis_sig}"
+            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
-        return jsonify({
-            "success": False,
-            "requires_visual": True,
-            "visual_type": "slider",
-            "bg_image": bg_b64,
-            "piece_image": piece_b64,
-            "piece_y": target_y,
-            "visual_ticket": visual_ticket,
-            "risk_score": risk_score
-        })
+            return jsonify({
+                "success": False,
+                "requires_visual": True,
+                "visual_type": "audio",
+                "audio_only": True,
+                "audio": audio_b64,
+                "visual_ticket": visual_ticket,
+                "risk_score": risk_score
+            })
+        elif challenge_type == 'rotation':
+            img_b64, target_angle = generate_rotation_challenge()
+            payload = f"rot:{challenge_string}:{target_angle}:{timestamp}"
+            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+            visual_ticket = f"{payload}.{vis_sig}"
+            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            
+            return jsonify({
+                "success": False,
+                "requires_visual": True,
+                "visual_type": "rotation",
+                "image": img_b64,
+                "visual_ticket": visual_ticket,
+                "risk_score": risk_score
+            })
+        else:
+            bg_b64, piece_b64, target_x, target_y = generate_slider_challenge()
+            payload = f"sli:{challenge_string}:{target_x}:{timestamp}"
+            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+            visual_ticket = f"{payload}.{vis_sig}"
+            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            
+            return jsonify({
+                "success": False,
+                "requires_visual": True,
+                "visual_type": "slider",
+                "bg_image": bg_b64,
+                "piece_image": piece_b64,
+                "piece_y": target_y,
+                "visual_ticket": visual_ticket,
+                "risk_score": risk_score
+            })
 
     from datetime import datetime
     stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
@@ -695,10 +969,46 @@ def siteverify():
             "error-codes": ["invalid-input-response"]
         }), 400
 
+@captcha_bp.route('/audio-challenge', methods=['POST', 'OPTIONS'])
+@limiter.limit("30 per minute")
+def audio_challenge():
+    """Generates an on-demand audio challenge for accessibility across all challenge types."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.get_json() or {}
+    site_key = data.get('sitekey')
+    if not site_key:
+        return jsonify({"success": False, "error": "Missing sitekey"}), 400
+    app = get_app_by_sitekey(site_key)
+    if not app:
+        return jsonify({"success": False, "error": "Invalid sitekey"}), 400
+    if not is_domain_authorized(app.domains, request):
+        return jsonify({"success": False, "error": "Domain not authorized"}), 403
+
+    digits_str, audio_b64 = generate_audio_challenge()
+    timestamp = str(int(time.time()))
+    challenge_string = secrets.token_hex(8)
+    payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
+    vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    visual_ticket = f"{payload}.{vis_sig}"
+
+    client_ip = get_client_ip()
+    upsert_captcha_log(site_key, "CHALLENGE", 0.5, client_ip, check_ip_vpn(client_ip))
+
+    return jsonify({
+        "success": False,
+        "requires_visual": True,
+        "visual_type": "audio",
+        "audio_only": False,
+        "audio": audio_b64,
+        "visual_ticket": visual_ticket,
+        "risk_score": 0.5
+    })
+
 @captcha_bp.route('/visual-verify', methods=['POST', 'OPTIONS'])
 @limiter.limit("20 per minute")
 def visual_verify():
-    """Validates the Visual Challenge and issues the token if valid."""
+    """Validates the Visual/Audio Challenge and issues the token if valid."""
     if request.method == 'OPTIONS':
         return '', 204
         
@@ -718,22 +1028,8 @@ def visual_verify():
         return jsonify({"success": False, "error": "Missing parameters"}), 400
         
     try:
-        challenge_string, rest = visual_ticket.split(':', 1)
-        payload_body, vis_sig = rest.rsplit('.', 1)
-        
-        # Backward compatibility for old tickets without timestamp
-        if ':' in payload_body:
-            expected_ans, timestamp_str = payload_body.split(':')
-            timestamp = int(timestamp_str)
-            if time.time() - timestamp > 300:
-                raise ValueError("Ticket expired")
-            payload = f"{challenge_string}:{expected_ans}:{timestamp_str}"
-        else:
-            expected_ans = payload_body
-            payload = f"{challenge_string}:{expected_ans}"
-            timestamp = int(time.time()) # fallback for consumption logic
-        
-        expected_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+        payload_body, vis_sig = visual_ticket.rsplit('.', 1)
+        expected_sig = hmac.new(app.secret_key.encode('utf-8'), payload_body.encode('utf-8'), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(vis_sig, expected_sig):
             raise ValueError("Invalid signature")
             
@@ -742,6 +1038,27 @@ def visual_verify():
         
         if ConsumedCaptchaToken.query.filter_by(signature=vis_sig).first():
             raise ValueError("Ticket already used")
+            
+        parts = payload_body.split(':')
+        
+        if len(parts) >= 4 and parts[0] in ['rot', 'sli', 'aud']:
+            c_type = parts[0]
+            challenge_string = parts[1]
+            expected_ans = parts[2]
+            timestamp = int(parts[3])
+        elif len(parts) == 3:
+            c_type = 'sli'
+            challenge_string = parts[0]
+            expected_ans = parts[1]
+            timestamp = int(parts[2])
+        else:
+            c_type = 'sli'
+            challenge_string = parts[0]
+            expected_ans = parts[1]
+            timestamp = int(time.time())
+            
+        if time.time() - timestamp > 300:
+            raise ValueError("Ticket expired")
             
         expires = datetime.utcfromtimestamp(timestamp) + timedelta(seconds=300)
         db.session.add(ConsumedCaptchaToken(signature=vis_sig, expires_at=expires))
@@ -754,13 +1071,27 @@ def visual_verify():
         upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))
         return jsonify({"success": False, "error": "Invalid ticket"}), 400
         
-    # Validation for slider offset
+    # Validation logic based on challenge type
+    is_valid = False
     try:
-        submitted_x = float(answer)
-        expected_x = float(expected_ans)
-        # Tolerance of +/- 4 pixels
-        is_valid = abs(submitted_x - expected_x) <= 4.0
-    except ValueError:
+        if c_type == 'rot':
+            submitted_angle = float(answer)
+            expected_rot = float(expected_ans)
+            deviation = (expected_rot + submitted_angle) % 360
+            if deviation > 180:
+                deviation = 360 - deviation
+            # Tolerance within 12 degrees
+            is_valid = abs(deviation) <= 12.0
+        elif c_type == 'aud':
+            clean_sub = ''.join(c for c in str(answer) if c.isdigit())
+            clean_exp = ''.join(c for c in str(expected_ans) if c.isdigit())
+            is_valid = (clean_sub == clean_exp) and len(clean_exp) >= 3
+        else:
+            submitted_x = float(answer)
+            expected_x = float(expected_ans)
+            # Tolerance of +/- 5 pixels
+            is_valid = abs(submitted_x - expected_x) <= 5.0
+    except (ValueError, TypeError):
         is_valid = False
         
     if not is_valid:

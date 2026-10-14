@@ -567,6 +567,7 @@
 
             // Visual Challenge UI Modal Overlay
             const visualOverlay = document.createElement('div');
+            visualOverlay.id = 'argus-visual-overlay';
             visualOverlay.style.cssText = `
                 display: none;
                 position: fixed;
@@ -574,50 +575,32 @@
                 left: 0;
                 width: 100vw;
                 height: 100vh;
-                background: rgba(0, 0, 0, 0.5);
+                background: rgba(0, 0, 0, 0.65);
+                backdrop-filter: blur(4px);
+                -webkit-backdrop-filter: blur(4px);
                 z-index: 2147483647;
                 align-items: center;
                 justify-content: center;
+                box-sizing: border-box;
             `;
 
             const visualContainer = document.createElement('div');
+            visualContainer.id = 'argus-visual-container';
             visualContainer.style.cssText = `
                 width: 100%;
-                max-width: 360px;
-                padding: 24px;
+                max-width: 380px;
+                padding: 22px 24px;
                 background: ${colors.bg};
                 border: 1px solid ${colors.border};
-                border-radius: 12px;
+                border-radius: 16px;
                 box-sizing: border-box;
                 text-align: center;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+                box-shadow: 0 20px 45px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06);
                 position: relative;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             `;
 
-            const closeButton = document.createElement('button');
-            closeButton.innerHTML = '&times;';
-            closeButton.style.cssText = `
-                position: absolute;
-                top: 15px;
-                right: 15px;
-                width: 30px;
-                height: 30px;
-                background: transparent;
-                color: ${colors.subText};
-                border: none;
-                border-radius: 50%;
-                font-size: 26px;
-                line-height: 1;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                transition: color 0.2s, background 0.2s;
-                z-index: 10;
-            `;
-            closeButton.onmouseover = () => { closeButton.style.background = 'rgba(0,0,0,0.05)'; closeButton.style.color = colors.text; };
-            closeButton.onmouseout = () => { closeButton.style.background = 'transparent'; closeButton.style.color = colors.subText; };
-            closeButton.onclick = () => {
+            const closeModal = () => {
                 visualOverlay.style.display = 'none';
                 isProcessing = false;
                 isFailed = false;
@@ -633,6 +616,132 @@
                 widget.style.borderColor = colors.border;
             };
 
+            const createHeaderIconBtn = (svgHtml, title, onClick) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.title = title;
+                btn.setAttribute('aria-label', title);
+                btn.innerHTML = svgHtml;
+                btn.style.cssText = `
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    width: 34px !important;
+                    height: 34px !important;
+                    min-width: 34px !important;
+                    min-height: 34px !important;
+                    max-width: 34px !important;
+                    max-height: 34px !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border: 1px solid ${colors.border || 'rgba(255,255,255,0.1)'} !important;
+                    border-radius: 8px !important;
+                    background: ${colors.boxBg || 'rgba(255,255,255,0.05)'} !important;
+                    color: ${colors.subText} !important;
+                    cursor: pointer !important;
+                    outline: none !important;
+                    box-shadow: none !important;
+                    box-sizing: border-box !important;
+                    transition: all 0.2s ease !important;
+                    flex-shrink: 0 !important;
+                    line-height: 1 !important;
+                `;
+                btn.onmouseover = () => {
+                    btn.style.color = colors.text;
+                    btn.style.borderColor = '#3b82f6';
+                    btn.style.background = 'rgba(59, 130, 246, 0.12)';
+                    btn.style.transform = 'translateY(-1px)';
+                };
+                btn.onmouseout = () => {
+                    btn.style.color = colors.subText;
+                    btn.style.borderColor = colors.border || 'rgba(255,255,255,0.1)';
+                    btn.style.background = colors.boxBg || 'rgba(255,255,255,0.05)';
+                    btn.style.transform = 'translateY(0)';
+                };
+                btn.onclick = onClick;
+                return btn;
+            };
+
+            const renderModalHeader = (titleText, descText, switchType, onSwitch) => {
+                const headerRow = document.createElement('div');
+                headerRow.style.cssText = `
+                    display: flex !important;
+                    align-items: flex-start !important;
+                    justify-content: space-between !important;
+                    margin-bottom: 20px !important;
+                    width: 100% !important;
+                    text-align: left !important;
+                    box-sizing: border-box !important;
+                `;
+
+                const textCol = document.createElement('div');
+                textCol.style.cssText = `
+                    flex: 1 !important;
+                    padding-right: 12px !important;
+                    min-width: 0 !important;
+                `;
+
+                const titleEl = document.createElement('h3');
+                titleEl.innerText = titleText;
+                titleEl.style.cssText = `
+                    margin: 0 0 5px 0 !important;
+                    font-size: 17px !important;
+                    font-weight: 600 !important;
+                    color: ${colors.text} !important;
+                    line-height: 1.25 !important;
+                    font-family: inherit !important;
+                `;
+
+                const descEl = document.createElement('p');
+                descEl.innerText = descText;
+                descEl.style.cssText = `
+                    margin: 0 !important;
+                    font-size: 13.5px !important;
+                    color: ${colors.subText} !important;
+                    line-height: 1.4 !important;
+                    font-family: inherit !important;
+                `;
+
+                textCol.appendChild(titleEl);
+                textCol.appendChild(descEl);
+                headerRow.appendChild(textCol);
+
+                const actionsCol = document.createElement('div');
+                actionsCol.style.cssText = `
+                    display: flex !important;
+                    align-items: center !important;
+                    gap: 6px !important;
+                    flex-shrink: 0 !important;
+                `;
+
+                if (switchType === 'audio') {
+                    const audioBtn = createHeaderIconBtn(
+                        `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>`,
+                        'Switch to audio challenge (Accessibility)',
+                        onSwitch
+                    );
+                    actionsCol.appendChild(audioBtn);
+                } else if (switchType === 'visual') {
+                    const visualBtn = createHeaderIconBtn(
+                        `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>`,
+                        'Switch to visual challenge',
+                        onSwitch
+                    );
+                    actionsCol.appendChild(visualBtn);
+                }
+
+                const closeBtn = createHeaderIconBtn(
+                    `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+                    'Close',
+                    closeModal
+                );
+                actionsCol.appendChild(closeBtn);
+
+                headerRow.appendChild(actionsCol);
+                visualContainer.appendChild(headerRow);
+                return { titleEl, descEl, actionsCol };
+            };
+
             visualOverlay.appendChild(visualContainer);
             document.body.appendChild(visualOverlay);
 
@@ -640,6 +749,14 @@
                 const style = document.createElement('style');
                 style.id = 'argus-captcha-styles';
                 style.innerHTML = `
+                    #argus-visual-overlay * {
+                        box-sizing: border-box !important;
+                    }
+                    #argus-visual-overlay button {
+                        font-family: inherit !important;
+                        text-transform: none !important;
+                        margin: 0;
+                    }
                     @keyframes argus-spin { to { transform: rotate(360deg); } }
                     @keyframes argus-fade { from { opacity: 0; } to { opacity: 1; } }
                     @keyframes argus-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
@@ -847,6 +964,7 @@
                         maxMouseVelocity: telemetryData.maxMouseVelocity,
                         honeypot: getHoneypotValue(container),
                         forceVisual: window.forceArgusVisual === true,
+                        forceChallenge: window.forceArgusChallenge || null,
                         url: window.location.href,
                         pow: powData
                     };
@@ -877,43 +995,263 @@
                         subText.style.display = 'block';
 
                         visualContainer.innerHTML = ''; // clear
-                        visualContainer.appendChild(closeButton);
 
-                        const headerDiv = document.createElement('div');
-                        headerDiv.style.cssText = `
-                            text-align: left;
-                            margin-bottom: 20px;
-                            padding-right: 30px;
-                        `;
+                        const onSwitchToAudio = async () => {
+                            visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                            visualContainer.style.opacity = '0';
+                            visualContainer.style.transform = 'scale(0.97)';
+                            
+                            setTimeout(async () => {
+                                renderAudioLoading();
+                                visualContainer.style.opacity = '1';
+                                visualContainer.style.transform = 'scale(1)';
+                                try {
+                                    const aRes = await fetch(`${HOST}/v1/captcha/audio-challenge`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ sitekey: sitekey })
+                                    });
+                                    const aData = await aRes.json();
+                                    if (aData.audio) {
+                                        visualContainer.style.opacity = '0';
+                                        visualContainer.style.transform = 'scale(0.97)';
+                                        setTimeout(() => {
+                                            renderAudioUI(aData, true);
+                                            visualContainer.style.opacity = '1';
+                                            visualContainer.style.transform = 'scale(1)';
+                                        }, 120);
+                                    } else {
+                                        triggerError(aData.error || 'Failed to load audio', false);
+                                    }
+                                } catch (e) {
+                                    triggerError('Failed to load audio', false);
+                                }
+                            }, 150);
+                        };
 
-                        const title = document.createElement('h3');
-                        title.innerText = "Security Challenge";
-                        title.style.cssText = `
-                            margin: 0 0 6px 0;
-                            font-size: 18px;
-                            color: ${colors.text};
-                            font-weight: 600;
-                            line-height: 1.2;
-                            font-family: inherit;
-                        `;
+                        const renderAudioLoading = () => {
+                            visualContainer.innerHTML = '';
+                            renderModalHeader("Audio Challenge", "Preparing audio challenge...", null, null);
+                            const loadDiv = document.createElement('div');
+                            loadDiv.style.cssText = `padding: 40px 20px; text-align: center; color: ${colors.subText}; font-size: 14px; font-family: inherit;`;
+                            loadDiv.innerHTML = '<div style="display:inline-block;width:32px;height:32px;border:3px solid #3b82f6;border-top:3px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;margin-bottom:12px;"></div><div>Synthesizing audio challenge...</div>';
+                            visualContainer.appendChild(loadDiv);
+                        };
 
-                        const instr = document.createElement('p');
-                        instr.style.cssText = `
-                            margin: 0;
-                            font-size: 14px;
-                            color: ${colors.subText};
-                            line-height: 1.4;
-                            font-family: inherit;
-                        `;
+                        const renderAudioUI = (aData, isSwitchedFromVisual = false) => {
+                            visualContainer.innerHTML = '';
+                            const isAudioOnly = (aData.audio_only === true) || (!isSwitchedFromVisual);
 
-                        headerDiv.appendChild(title);
-                        headerDiv.appendChild(instr);
-                        visualContainer.appendChild(headerDiv);
+                            renderModalHeader(
+                                isAudioOnly ? "Audio Verification" : "Audio Challenge",
+                                isAudioOnly ? "Security verification: Listen and enter the numbers heard." : "Listen to the numbers and enter them below.",
+                                isAudioOnly ? null : 'visual',
+                                () => {
+                                    if (audioObj) audioObj.pause();
+                                    isProcessing = false;
+                                    visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                                    visualContainer.style.opacity = '0';
+                                    visualContainer.style.transform = 'scale(0.97)';
+                                    setTimeout(() => {
+                                        executeChallenge();
+                                        visualContainer.style.opacity = '1';
+                                        visualContainer.style.transform = 'scale(1)';
+                                    }, 150);
+                                }
+                            );
+
+                            const audioCard = document.createElement('div');
+                            audioCard.style.cssText = `
+                                display: flex;
+                                flex-direction: column;
+                                align-items: center;
+                                justify-content: center;
+                                padding: 22px 16px;
+                                background: ${colors.boxBg};
+                                border: 1px solid ${colors.boxBorder};
+                                border-radius: 12px;
+                                margin-bottom: 16px;
+                            `;
+
+                            const playBtn = document.createElement('button');
+                            playBtn.type = 'button';
+                            playBtn.title = 'Play Audio';
+                            playBtn.style.cssText = `
+                                width: 56px !important;
+                                height: 56px !important;
+                                min-width: 56px !important;
+                                min-height: 56px !important;
+                                padding: 0 !important;
+                                margin: 0 !important;
+                                border-radius: 50% !important;
+                                background: #3b82f6 !important;
+                                color: white !important;
+                                border: none !important;
+                                cursor: pointer !important;
+                                display: inline-flex !important;
+                                align-items: center !important;
+                                justify-content: center !important;
+                                transition: transform 0.15s, background 0.2s !important;
+                                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35) !important;
+                                outline: none !important;
+                                box-sizing: border-box !important;
+                            `;
+                            playBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display:block;flex-shrink:0;"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
+
+                            const playLabel = document.createElement('div');
+                            playLabel.innerText = "Play Audio";
+                            playLabel.style.cssText = `
+                                font-size: 13px;
+                                font-weight: 500;
+                                color: ${colors.text};
+                                margin-top: 10px;
+                                font-family: inherit;
+                            `;
+
+                            let audioObj = null;
+                            try {
+                                audioObj = new Audio("data:audio/wav;base64," + aData.audio);
+                            } catch (e) {
+                                console.warn("Audio element failed to load base64:", e);
+                            }
+
+                            playBtn.onclick = () => {
+                                if (!audioObj) return;
+                                playBtn.style.transform = 'scale(0.92)';
+                                setTimeout(() => { playBtn.style.transform = 'scale(1)'; }, 150);
+                                playLabel.innerText = "Playing...";
+                                playBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:argus-pulse 1s infinite;display:block;flex-shrink:0;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>`;
+                                audioObj.currentTime = 0;
+                                audioObj.play().catch(err => {
+                                    console.warn("Audio play blocked:", err);
+                                    playLabel.innerText = "Click to replay";
+                                });
+                                audioObj.onended = () => {
+                                    playLabel.innerText = "Click to replay";
+                                    playBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`;
+                                };
+                            };
+
+                            audioCard.appendChild(playBtn);
+                            audioCard.appendChild(playLabel);
+                            visualContainer.appendChild(audioCard);
+
+                            const audioInput = document.createElement('input');
+                            audioInput.type = 'text';
+                            audioInput.inputMode = 'numeric';
+                            audioInput.pattern = '[0-9]*';
+                            audioInput.placeholder = '• • • • •';
+                            audioInput.maxLength = 10;
+                            audioInput.style.cssText = `
+                                width: 100% !important;
+                                padding: 12px !important;
+                                background: ${colors.boxBg} !important;
+                                color: ${colors.text} !important;
+                                border: 1px solid ${colors.boxBorder} !important;
+                                border-radius: 10px !important;
+                                font-size: 22px !important;
+                                font-weight: 700 !important;
+                                text-align: center !important;
+                                letter-spacing: 6px !important;
+                                margin-bottom: 16px !important;
+                                box-sizing: border-box !important;
+                                outline: none !important;
+                                font-family: inherit !important;
+                                transition: border-color 0.2s !important;
+                            `;
+                            audioInput.onfocus = () => { audioInput.style.borderColor = '#3b82f6'; };
+                            audioInput.onblur = () => { audioInput.style.borderColor = colors.boxBorder; };
+                            visualContainer.appendChild(audioInput);
+
+                            const aVerifyBtn = document.createElement('button');
+                            aVerifyBtn.type = 'button';
+                            aVerifyBtn.innerText = 'Verify';
+                            aVerifyBtn.style.cssText = `
+                                width: 100% !important;
+                                padding: 12px !important;
+                                margin: 0 !important;
+                                background: #3b82f6 !important;
+                                color: white !important;
+                                border: none !important;
+                                border-radius: 10px !important;
+                                font-size: 15px !important;
+                                font-weight: 600 !important;
+                                cursor: pointer !important;
+                                transition: background 0.2s !important;
+                                box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important;
+                                box-sizing: border-box !important;
+                                outline: none !important;
+                                display: block !important;
+                            `;
+                            aVerifyBtn.onmouseover = () => { aVerifyBtn.style.background = '#2563eb'; };
+                            aVerifyBtn.onmouseout = () => { aVerifyBtn.style.background = '#3b82f6'; };
+
+                            const submitAudio = async () => {
+                                const val = audioInput.value.trim();
+                                if (!val) {
+                                    audioInput.focus();
+                                    return;
+                                }
+                                aVerifyBtn.disabled = true;
+                                aVerifyBtn.innerHTML = '<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...';
+                                try {
+                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            sitekey: sitekey,
+                                            visual_ticket: aData.visual_ticket,
+                                            answer: val
+                                        })
+                                    });
+                                    const visData = await vRes.json();
+                                    if (visData.success && visData.token) {
+                                        console.log(`[Argus Captcha] Validation [PASS] (Audio)`);
+                                        if (audioObj) audioObj.pause();
+                                        visualOverlay.style.display = 'none';
+                                        injectToken(visData.token);
+                                    } else {
+                                        if (audioObj) audioObj.pause();
+                                        visualOverlay.style.display = 'none';
+                                        triggerError('Validation failed', false);
+                                    }
+                                } catch (e) {
+                                    if (audioObj) audioObj.pause();
+                                    visualOverlay.style.display = 'none';
+                                    triggerError('Validation failed', false);
+                                }
+                            };
+
+                            aVerifyBtn.onclick = submitAudio;
+                            audioInput.onkeydown = (e) => {
+                                if (e.key === 'Enter') submitAudio();
+                            };
+
+                            visualContainer.appendChild(aVerifyBtn);
+                            visualOverlay.style.display = 'flex';
+                            setTimeout(() => {
+                                audioInput.focus();
+                                playBtn.click();
+                            }, 250);
+                        };
+
+                        if (data.visual_type === 'audio') {
+                            renderAudioUI(data, false);
+                            return;
+                        }
+
+                        // Universal Header for all current and future visual challenges
+                        const headerInfo = renderModalHeader(
+                            "Security Challenge",
+                            "",
+                            'audio',
+                            onSwitchToAudio
+                        );
 
                         if (data.visual_type === 'slider') {
-                            instr.innerText = "Drag the slider to fit the puzzle piece.";
+                            headerInfo.descEl.innerText = "Drag the slider to fit the puzzle piece.";
                             const bgContainer = document.createElement('div');
-                            bgContainer.style.cssText = `position: relative; width: 100%; height: 150px; background-image: url(data:image/png;base64,${data.bg_image}); background-size: 100% 100%; border-radius: 4px; overflow: hidden;`;
+                            bgContainer.style.cssText = `position: relative; width: 100%; height: 150px; background-image: url(data:image/png;base64,${data.bg_image}); background-size: 100% 100%; border-radius: 8px; overflow: hidden; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
 
                             const pieceImg = document.createElement('img');
                             pieceImg.src = "data:image/png;base64," + data.piece_image;
@@ -921,14 +1259,14 @@
                             bgContainer.appendChild(pieceImg);
 
                             const sliderTrack = document.createElement('div');
-                            sliderTrack.style.cssText = `position: relative; width: 100%; height: 40px; background: ${colors.boxBg}; border: 1px solid ${colors.boxBorder}; border-radius: 20px; margin-top: 15px; box-sizing: border-box; overflow: hidden;`;
+                            sliderTrack.style.cssText = `position: relative; width: 100%; height: 42px; background: ${colors.boxBg}; border: 1px solid ${colors.boxBorder}; border-radius: 21px; margin-top: 16px; box-sizing: border-box; overflow: hidden;`;
 
                             const sliderFill = document.createElement('div');
-                            sliderFill.style.cssText = `position: absolute; top: 0; left: 0; height: 100%; width: 0; background: #3b82f6; opacity: 0.2; border-radius: 20px 0 0 20px;`;
+                            sliderFill.style.cssText = `position: absolute; top: 0; left: 0; height: 100%; width: 0; background: #3b82f6; opacity: 0.2; border-radius: 21px 0 0 21px;`;
                             sliderTrack.appendChild(sliderFill);
 
                             const sliderHandle = document.createElement('div');
-                            sliderHandle.style.cssText = `position: absolute; top: 0; left: 0; width: 12.5%; height: 100%; background: #3b82f6; border-radius: 20px; cursor: grab; display: flex; justify-content: center; align-items: center; color: white; transition: background 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); user-select: none; font-size: 18px;`;
+                            sliderHandle.style.cssText = `position: absolute; top: 0; left: 0; width: 48px; height: 100%; background: #3b82f6; border-radius: 21px; cursor: grab; display: flex; justify-content: center; align-items: center; color: white; transition: background 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.25); user-select: none; font-size: 18px; box-sizing: border-box;`;
                             sliderHandle.innerHTML = '&#8594;'; // right arrow
                             sliderTrack.appendChild(sliderHandle);
 
@@ -1009,22 +1347,262 @@
                             sliderHandle.addEventListener('mousedown', onStart);
                             sliderHandle.addEventListener('touchstart', onStart, { passive: false });
 
+                        } else if (data.visual_type === 'rotation') {
+                            headerInfo.descEl.innerText = "Rotate the object until it is right-side up.";
+
+                            const rotWrapper = document.createElement('div');
+                            rotWrapper.style.cssText = `
+                                display: flex;
+                                flex-direction: column;
+                                align-items: center;
+                                justify-content: center;
+                                width: 100%;
+                                box-sizing: border-box;
+                            `;
+
+                            const frameContainer = document.createElement('div');
+                            frameContainer.style.cssText = `
+                                position: relative;
+                                display: inline-block;
+                                margin: 10px auto 16px auto;
+                                box-sizing: border-box;
+                            `;
+
+                            const topMarker = document.createElement('div');
+                            topMarker.title = "Top orientation indicator";
+                            topMarker.style.cssText = `
+                                position: absolute;
+                                top: -8px;
+                                left: 50%;
+                                transform: translateX(-50%);
+                                width: 0;
+                                height: 0;
+                                border-left: 6px solid transparent;
+                                border-right: 6px solid transparent;
+                                border-top: 7px solid #3b82f6;
+                                z-index: 10;
+                                filter: drop-shadow(0 1px 2px rgba(59, 130, 246, 0.5));
+                            `;
+
+                            // Circular preview frame
+                            const imgFrame = document.createElement('div');
+                            imgFrame.style.cssText = `
+                                position: relative;
+                                width: 172px;
+                                height: 172px;
+                                border-radius: 50%;
+                                background: ${colors.boxBg};
+                                border: 2px solid ${colors.border};
+                                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+                                overflow: hidden;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                box-sizing: border-box;
+                            `;
+
+                            const rotImg = document.createElement('img');
+                            rotImg.src = "data:image/png;base64," + data.image;
+                            rotImg.style.cssText = `
+                                width: 100%;
+                                height: 100%;
+                                border-radius: 50%;
+                                user-select: none;
+                                -webkit-user-drag: none;
+                                pointer-events: none;
+                                transform-origin: 50% 50%;
+                                transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
+                            `;
+                            imgFrame.appendChild(rotImg);
+                            frameContainer.appendChild(topMarker);
+                            frameContainer.appendChild(imgFrame);
+                            rotWrapper.appendChild(frameContainer);
+
+                            let currentAngle = 0;
+
+                            const updateRotation = (angle, animate = true) => {
+                                currentAngle = ((angle % 360) + 360) % 360;
+                                rotImg.style.transition = animate ? 'transform 0.15s cubic-bezier(0.2, 0, 0, 1)' : 'none';
+                                rotImg.style.transform = `rotate(${currentAngle}deg)`;
+                                slider.value = currentAngle;
+                            };
+
+                            // Button controls container
+                            const controlsRow = document.createElement('div');
+                            controlsRow.style.cssText = `
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 20px;
+                                width: 100%;
+                                margin-bottom: 14px;
+                                box-sizing: border-box;
+                            `;
+
+                            const createRotateBtn = (svgPath, delta, label) => {
+                                const btn = document.createElement('button');
+                                btn.type = 'button';
+                                btn.title = label;
+                                btn.innerHTML = svgPath;
+                                btn.style.cssText = `
+                                    width: 44px !important;
+                                    height: 44px !important;
+                                    min-width: 44px !important;
+                                    min-height: 44px !important;
+                                    padding: 0 !important;
+                                    margin: 0 !important;
+                                    border-radius: 50% !important;
+                                    background: ${colors.boxBg} !important;
+                                    border: 1px solid ${colors.border} !important;
+                                    color: ${colors.text} !important;
+                                    display: inline-flex !important;
+                                    align-items: center !important;
+                                    justify-content: center !important;
+                                    cursor: pointer !important;
+                                    transition: all 0.2s ease !important;
+                                    box-shadow: 0 2px 4px rgba(0,0,0,0.06) !important;
+                                    box-sizing: border-box !important;
+                                    outline: none !important;
+                                `;
+                                btn.onmouseover = () => {
+                                    btn.style.borderColor = '#3b82f6';
+                                    btn.style.color = '#3b82f6';
+                                    btn.style.transform = 'scale(1.08)';
+                                };
+                                btn.onmouseout = () => {
+                                    btn.style.borderColor = colors.border;
+                                    btn.style.color = colors.text;
+                                    btn.style.transform = 'scale(1)';
+                                };
+                                btn.onclick = () => {
+                                    updateRotation(currentAngle + delta, true);
+                                };
+                                return btn;
+                            };
+
+                            // Left rotate button (-30 deg)
+                            const btnLeft = createRotateBtn(
+                                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+                                -30,
+                                "Rotate left 30 degrees"
+                            );
+
+                            // Right rotate button (+30 deg)
+                            const btnRight = createRotateBtn(
+                                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+                                30,
+                                "Rotate right 30 degrees"
+                            );
+
+                            controlsRow.appendChild(btnLeft);
+                            controlsRow.appendChild(btnRight);
+                            rotWrapper.appendChild(controlsRow);
+
+                            // Slider container for smooth adjustment
+                            const sliderContainer = document.createElement('div');
+                            sliderContainer.style.cssText = `
+                                width: 100%;
+                                display: flex;
+                                align-items: center;
+                                margin-bottom: 18px;
+                                box-sizing: border-box;
+                            `;
+
+                            const slider = document.createElement('input');
+                            slider.type = 'range';
+                            slider.min = '0';
+                            slider.max = '360';
+                            slider.step = '1';
+                            slider.value = '0';
+                            slider.style.cssText = `
+                                width: 100% !important;
+                                cursor: pointer !important;
+                                accent-color: #3b82f6 !important;
+                                margin: 0 !important;
+                                box-sizing: border-box !important;
+                            `;
+                            slider.oninput = (e) => {
+                                updateRotation(parseFloat(e.target.value), false);
+                            };
+                            sliderContainer.appendChild(slider);
+                            rotWrapper.appendChild(sliderContainer);
+
+                            // Verify Button
+                            const verifyBtn = document.createElement('button');
+                            verifyBtn.type = 'button';
+                            verifyBtn.innerText = 'Verify';
+                            verifyBtn.style.cssText = `
+                                width: 100% !important;
+                                padding: 12px !important;
+                                margin: 0 !important;
+                                background: #3b82f6 !important;
+                                color: white !important;
+                                border: none !important;
+                                border-radius: 10px !important;
+                                font-size: 15px !important;
+                                font-weight: 600 !important;
+                                cursor: pointer !important;
+                                transition: background 0.2s, transform 0.1s !important;
+                                box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important;
+                                box-sizing: border-box !important;
+                                outline: none !important;
+                                display: block !important;
+                            `;
+                            verifyBtn.onmouseover = () => { verifyBtn.style.background = '#2563eb'; };
+                            verifyBtn.onmouseout = () => { verifyBtn.style.background = '#3b82f6'; };
+
+                            const visualTicket = data.visual_ticket;
+
+                            verifyBtn.onclick = async () => {
+                                verifyBtn.disabled = true;
+                                verifyBtn.innerHTML = '<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...';
+                                try {
+                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            sitekey: sitekey,
+                                            visual_ticket: visualTicket,
+                                            answer: currentAngle.toString()
+                                        })
+                                    });
+                                    const visData = await vRes.json();
+                                    if (visData.success && visData.token) {
+                                        console.log(`[Argus Captcha] Validation [PASS] (Rotation)`);
+                                        visualOverlay.style.display = 'none';
+                                        injectToken(visData.token);
+                                    } else {
+                                        visualOverlay.style.display = 'none';
+                                        triggerError('Validation failed', false);
+                                    }
+                                } catch (e) {
+                                    visualOverlay.style.display = 'none';
+                                    triggerError('Validation failed', false);
+                                }
+                            };
+
+                            rotWrapper.appendChild(verifyBtn);
+                            visualContainer.appendChild(rotWrapper);
+                            visualOverlay.style.display = 'flex';
+
                         } else {
-                            instr.innerText = "Type the text from the image below.";
+                            headerInfo.descEl.innerText = "Type the text from the image below.";
                             // Text challenge fallback
                             const visualImg = document.createElement('img');
                             visualImg.src = "data:image/png;base64," + data.image;
-                            visualImg.style.cssText = `max-width: 100%; border-radius: 4px; margin-bottom: 8px;`;
+                            visualImg.style.cssText = `max-width: 100%; border-radius: 8px; margin-bottom: 12px; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
                             const visualInput = document.createElement('input');
                             visualInput.type = 'text';
                             visualInput.placeholder = 'Enter the text above';
-                            visualInput.style.cssText = `width: 100%; padding: 10px 12px; background: ${colors.boxBg}; color: ${colors.text}; border: 1px solid ${colors.boxBorder}; border-radius: 6px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; outline: none;`;
+                            visualInput.style.cssText = `width: 100% !important; padding: 12px !important; background: ${colors.boxBg} !important; color: ${colors.text} !important; border: 1px solid ${colors.boxBorder} !important; border-radius: 10px !important; font-size: 15px !important; margin-bottom: 14px !important; box-sizing: border-box !important; outline: none !important; font-family: inherit !important;`;
                             visualInput.onfocus = () => { visualInput.style.borderColor = '#3b82f6'; };
                             visualInput.onblur = () => { visualInput.style.borderColor = colors.boxBorder; };
                             const visualBtn = document.createElement('button');
                             visualBtn.innerText = 'Verify';
                             visualBtn.type = 'button';
-                            visualBtn.style.cssText = `width: 100%; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s;`;
+                            visualBtn.style.cssText = `width: 100% !important; padding: 12px !important; margin: 0 !important; background: #3b82f6 !important; color: white !important; border: none !important; border-radius: 10px !important; cursor: pointer !important; font-size: 15px !important; font-weight: 600 !important; transition: background 0.2s !important; box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important; box-sizing: border-box !important; outline: none !important; display: block !important;`;
+                            visualBtn.onmouseover = () => { visualBtn.style.background = '#2563eb'; };
+                            visualBtn.onmouseout = () => { visualBtn.style.background = '#3b82f6'; };
                             visualContainer.appendChild(visualImg);
                             visualContainer.appendChild(visualInput);
                             visualContainer.appendChild(visualBtn);
@@ -1047,11 +1625,11 @@
                                         injectToken(visData.token);
                                     } else {
                                         visualOverlay.style.display = 'none';
-                                        triggerFail();
+                                        triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
                                     visualOverlay.style.display = 'none';
-                                    triggerFail();
+                                    triggerError('Validation failed', false);
                                 }
                             };
                         }

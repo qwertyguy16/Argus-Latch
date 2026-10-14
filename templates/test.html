@@ -45,7 +45,7 @@
             outline: none;
             border-color: #4CAF50;
         }
-        button {
+        .container button {
             width: 100%;
             padding: 0.75rem;
             background-color: #4CAF50;
@@ -57,7 +57,7 @@
             margin-top: 1rem;
             transition: background-color 0.2s;
         }
-        button:hover {
+        .container button:hover {
             background-color: #45a049;
         }
         #captcha-container {
@@ -81,6 +81,17 @@
     <div class="container">
         <h2 style="text-align: center; margin-top: 0;">Argus Latch Tester</h2>
         <div class="form-group">
+            <label for="preset-select">Simulate Suspicion / Test Mode</label>
+            <select id="preset-select" style="width: 100%; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background-color: #333; color: white;">
+                <option value="auto">Auto Telemetry Analysis (Natural Risk Score)</option>
+                <option value="slider">Mild Suspicion -> Slider Puzzle Challenge</option>
+                <option value="rotation">Moderate Suspicion -> Image Rotation Challenge</option>
+                <option value="audio">High Suspicion (Bot Signature) -> Audio Only Challenge</option>
+                <option value="pass">Clean Client -> Seamless Instant Pass</option>
+                <option value="fail">Extreme Suspicion -> Blocked (403)</option>
+            </select>
+        </div>
+        <div class="form-group">
             <label for="site-key">Site Key</label>
             <input type="text" id="site-key" placeholder="Enter Site Key">
         </div>
@@ -102,6 +113,30 @@
     </div>
 
     <script>
+        const PRESETS = {
+            auto: { site: 'argus_3x000000000000000000000000', secret: 'sk_3x000000000000000000000000' },
+            rotation: { site: 'argus_5x000000000000000000000000', secret: 'sk_5x000000000000000000000000' },
+            slider: { site: 'argus_4x000000000000000000000000', secret: 'sk_4x000000000000000000000000' },
+            audio: { site: 'argus_6x000000000000000000000000', secret: 'sk_6x000000000000000000000000' },
+            pass: { site: 'argus_1x000000000000000000000000', secret: 'sk_1x000000000000000000000000' },
+            fail: { site: 'argus_2x000000000000000000000000', secret: 'sk_2x000000000000000000000000' }
+        };
+
+        const presetSelect = document.getElementById('preset-select');
+        const siteKeyInput = document.getElementById('site-key');
+        const secretKeyInput = document.getElementById('secret-key');
+
+        const applyPreset = () => {
+            const val = presetSelect.value;
+            if (PRESETS[val]) {
+                siteKeyInput.value = PRESETS[val].site;
+                secretKeyInput.value = PRESETS[val].secret;
+            }
+        };
+
+        presetSelect.addEventListener('change', applyPreset);
+        applyPreset();
+
         document.getElementById('init-btn').addEventListener('click', () => {
             const siteKey = document.getElementById('site-key').value.trim();
             if (!siteKey) {
