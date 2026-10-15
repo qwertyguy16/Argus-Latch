@@ -204,29 +204,30 @@
                 submitButtons = parentForm.querySelectorAll('button[type="submit"], input[type="submit"]');
             }
 
-            if (!sitekey) {
-                container.innerHTML = `<div style="color:red; font-size:12px; padding:8px; border:1px solid red; border-radius:4px;">Argus Captcha Error: Missing sitekey</div>`;
-                return;
-            }
-
             let mode = 'manual';
             let theme = 'auto';
             let initialError = null;
             let isTestMode = false;
 
-            try {
-                const res = await fetch(`${HOST}/v1/captcha/settings?sitekey=${sitekey}`);
-                const data = await res.json();
-                if (!data.success) {
-                    initialError = data.error || 'Failed to load settings';
-                } else {
-                    mode = data.mode || 'manual';
-                    theme = data.theme || 'auto';
-                    isTestMode = data.is_test || false;
-                }
-            } catch (err) {
-                console.error("Argus Captcha Settings Error:", err);
+            if (!sitekey) {
+                initialError = "Missing sitekey";
+            } else if (sitekey === 'argus_simulate_network_error') {
                 initialError = "Network Error";
+            } else {
+                try {
+                    const res = await fetch(`${HOST}/v1/captcha/settings?sitekey=${encodeURIComponent(sitekey)}`);
+                    const data = await res.json();
+                    if (!data.success) {
+                        initialError = data.error || 'Failed to load settings';
+                    } else {
+                        mode = data.mode || 'manual';
+                        theme = data.theme || 'auto';
+                        isTestMode = data.is_test || false;
+                    }
+                } catch (err) {
+                    console.error("Argus Captcha Settings Error:", err);
+                    initialError = "Network Error";
+                }
             }
 
 
@@ -353,9 +354,10 @@
             `;
 
             const exclamation = document.createElement('div');
-            exclamation.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="12" y1="8" x2="12" y2="12" style="stroke-dasharray: 10; stroke-dashoffset: 10;"></line>
-                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            exclamation.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="14" cy="14" r="14" fill="#f59e0b"/>
+                <line x1="14" y1="8" x2="14" y2="15.5" stroke="white" stroke-width="2.6" stroke-linecap="round"></line>
+                <circle cx="14" cy="19.5" r="1.4" fill="white"></circle>
             </svg>`;
             exclamation.style.cssText = `
                 display: none;
@@ -401,8 +403,29 @@
                 text-overflow: ellipsis;
             `;
 
+            const learnMore = document.createElement('a');
+            learnMore.innerText = 'Learn more';
+            learnMore.target = '_blank';
+            learnMore.rel = 'noopener noreferrer';
+            const refHost = window.location.hostname;
+            learnMore.href = 'https://argusgroup.co.uk/help/latch/errors' + (refHost ? `?r=${encodeURIComponent(refHost)}` : '');
+            learnMore.style.cssText = `
+                font-size: 10px;
+                color: #3b82f6;
+                text-decoration: none;
+                margin-top: 1px;
+                display: none;
+                width: fit-content;
+                cursor: pointer;
+                line-height: 1.2;
+            `;
+            learnMore.onmouseenter = () => { learnMore.style.textDecoration = 'underline'; };
+            learnMore.onmouseleave = () => { learnMore.style.textDecoration = 'none'; };
+            learnMore.addEventListener('click', (e) => e.stopPropagation());
+
             textContainer.appendChild(text);
             textContainer.appendChild(subText);
+            textContainer.appendChild(learnMore);
 
             logoContainer.style.cssText = `
                 display: flex;
@@ -850,33 +873,128 @@
                 container.dispatchEvent(new CustomEvent('argus-success', { detail: { token: token } }));
             };
 
+            const getPresetErrorDescription = (errMsg) => {
+                if (!errMsg) return "An unexpected error occurred.";
+                const str = String(errMsg).toLowerCase().trim();
+
+                if (str.includes("network") || str.includes("failed to fetch") || str.includes("connection")) {
+                    return "Connection failed. Click to retry.";
+                }
+                if (str.includes("service") || str.includes("unavailable") || str.includes("server") || str.includes("500") || str.includes("503") || str.includes("settings") || str.includes("load") || str.includes("simulated") || str.includes("demo")) {
+                    return "Service temporarily unavailable.";
+                }
+                if (str.includes("blocked") || str.includes("high risk") || str.includes("security validation") || str.includes("403")) {
+                    return "Verification blocked by security policy.";
+                }
+                if (str.includes("rate limit") || str.includes("too many") || str.includes("429")) {
+                    return "Too many requests. Try again later.";
+                }
+                if (str.includes("expired") || str.includes("timeout")) {
+                    return "Verification expired. Please retry.";
+                }
+                if (str.includes("missing sitekey") || str.includes("missing site_key") || str.includes("invalid sitekey") || str.includes("invalid site_key") || str.includes("invalid key") || str.includes("not found")) {
+                    return "Invalid verification configuration.";
+                }
+                if (str.includes("domain") && (str.includes("not authorized") || str.includes("unauthorized") || str.includes("mismatch"))) {
+                    return "Domain not authorized.";
+                }
+                if (str.includes("audio") && str.includes("fail")) {
+                    return "Audio challenge unavailable.";
+                }
+                if (errMsg.length <= 32) {
+                    return errMsg;
+                }
+                return "Verification service error.";
+            };
+
             const triggerError = (msg, isFatal = false) => {
                 const timestamp = new Date().toISOString();
-                console.log(`[Argus Captcha] Completed at: ${timestamp} | Result: FAIL | Reason: ${msg} | Website: ${window.location.href}`);
+                const desc = getPresetErrorDescription(msg);
+                console.log(`[Argus Captcha] Completed at: ${timestamp} | Result: FAIL | Reason: ${msg} (${desc}) | Website: ${window.location.href}`);
                 isProcessing = false;
                 isFailed = true;
 
                 const errorCbName = container.dataset.errorCallback;
                 if (errorCbName && typeof window[errorCbName] === 'function') {
-                    window[errorCbName](msg);
+                    window[errorCbName](msg, desc);
                 }
-                container.dispatchEvent(new CustomEvent('argus-error', { detail: { message: msg } }));
+                container.dispatchEvent(new CustomEvent('argus-error', { detail: { message: msg, description: desc } }));
 
                 spinner.style.display = 'none';
                 box.style.display = 'none';
 
                 if (isFatal) {
+                    crossmark.style.display = 'none';
+                    checkmark.style.display = 'none';
                     exclamation.style.display = 'block';
-                    const lines = exclamation.querySelectorAll('line');
-                    lines[0].style.animation = 'argus-draw-exclamation 0.3s ease forwards';
-                    lines[1].style.animation = 'argus-draw-exclamation 0.3s ease 0.15s forwards';
+                    exclamation.style.animation = 'none';
+                    void exclamation.offsetWidth;
+                    exclamation.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
 
                     text.innerText = "Error";
                     text.style.color = '#f59e0b';
-                    subText.style.display = 'none';
-                    widget.style.borderColor = '#f59e0b';
+                    text.style.fontWeight = '500';
+                    text.style.fontSize = '14px';
+
+                    subText.innerText = desc;
+                    subText.style.display = 'block';
+                    subText.style.color = colors.subText;
+                    subText.style.fontSize = '11px';
+                    subText.style.lineHeight = '1.3';
+                    subText.style.opacity = '0.9';
+                    subText.title = msg ? `${desc} (${msg})` : desc;
+                    let errorCode = "service_unavailable";
+                    const lowerMsg = String(msg || "").toLowerCase();
+                    if (lowerMsg.includes("blocked") || lowerMsg.includes("high risk") || lowerMsg.includes("security validation") || lowerMsg.includes("403")) {
+                        errorCode = "blocked";
+                    } else if (lowerMsg.includes("network") || lowerMsg.includes("failed to fetch") || lowerMsg.includes("connection")) {
+                        errorCode = "network";
+                    } else if (lowerMsg.includes("domain") && (lowerMsg.includes("not authorized") || lowerMsg.includes("unauthorized") || lowerMsg.includes("mismatch"))) {
+                        errorCode = "unauthorized_domain";
+                    } else if (lowerMsg.includes("rate limit") || lowerMsg.includes("too many") || lowerMsg.includes("429")) {
+                        errorCode = "rate_limited";
+                    } else if (lowerMsg.includes("missing sitekey") || lowerMsg.includes("missing site_key") || lowerMsg.includes("invalid sitekey") || lowerMsg.includes("invalid site_key") || lowerMsg.includes("invalid key") || lowerMsg.includes("not found")) {
+                        errorCode = "invalid_key";
+                    } else if (lowerMsg.includes("service") || lowerMsg.includes("unavailable") || lowerMsg.includes("server") || lowerMsg.includes("500") || lowerMsg.includes("503") || lowerMsg.includes("settings") || lowerMsg.includes("load") || lowerMsg.includes("simulated") || lowerMsg.includes("demo")) {
+                        errorCode = "service_unavailable";
+                    }
+
+                    const params = [];
+                    if (refHost) {
+                        params.push(`r=${encodeURIComponent(refHost)}`);
+                    }
+                    if (errorCode) {
+                        params.push(`e=${encodeURIComponent(errorCode)}`);
+                    }
+                    learnMore.href = 'https://argusgroup.co.uk/help/latch/errors' + (params.length > 0 ? `?${params.join('&')}` : '');
+                    learnMore.style.display = 'block';
+
+                    widget.style.borderColor = 'rgba(245, 158, 11, 0.6)';
+                    widget.style.boxShadow = '0 0 0 1px rgba(245, 158, 11, 0.2), 0 2px 8px rgba(245, 158, 11, 0.08)';
                     widget.style.cursor = 'not-allowed';
-                    widget.title = msg; // Tooltip on hover
+                    widget.title = `Argus Error: ${desc} - ${msg}`;
+
+                    // If network error, provide click-to-retry
+                    if (String(msg).toLowerCase().includes('network') || String(msg).toLowerCase().includes('connection') || String(msg).toLowerCase().includes('fetch')) {
+                        widget.style.cursor = 'pointer';
+                        subText.innerText = `${desc}`;
+                        const retryHandler = () => {
+                            widget.removeEventListener('click', retryHandler);
+                            exclamation.style.display = 'none';
+                            box.style.display = 'block';
+                            text.innerText = "Verify you are human";
+                            text.style.color = colors.text;
+                            subText.style.display = 'none';
+                            learnMore.style.display = 'none';
+                            widget.style.borderColor = colors.border;
+                            widget.style.boxShadow = '0px 0px 4px 1px rgba(0,0,0,0.08)';
+                            widget.style.cursor = 'default';
+                            isFailed = false;
+                            executeChallenge();
+                        };
+                        widget.addEventListener('click', retryHandler, { once: true });
+                    }
+
                     return; // Permanent error, do not reset
                 }
 
@@ -1753,12 +1871,25 @@
                         }
                     }
                     else {
-                        throw { message: data.error || "Verification failed", fatal: data.error === "Invalid sitekey" || data.error === "Domain not authorized" || data.error === "Missing sitekey" };
+                        const isFatal = !res.ok || res.status === 403 || res.status === 400 ||
+                            data.error === "Invalid sitekey" || 
+                            data.error === "Domain not authorized" || 
+                            data.error === "Missing sitekey" ||
+                            (data.error && (
+                                data.error.toLowerCase().includes("blocked") || 
+                                data.error.toLowerCase().includes("high risk") || 
+                                data.error.toLowerCase().includes("security")
+                            ));
+                        throw { 
+                            message: data.error || (res.status === 403 ? "Client blocked by security policy" : "Verification failed"), 
+                            fatal: isFatal 
+                        };
                     }
                 } catch (err) {
                     console.error("Argus Captcha Error:", err);
                     console.log(`[Argus Captcha] Validation [FAIL]: ${err.message || 'Unknown Error'}`);
-                    triggerError(err.message, err.fatal === true);
+                    const isFatal = err.fatal === true || !navigator.onLine || err.name === 'TypeError' || (err.message && err.message.toLowerCase().includes('network'));
+                    triggerError(err.message || 'Verification error', isFatal);
                 }
             };
 

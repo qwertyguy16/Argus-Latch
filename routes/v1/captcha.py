@@ -18,7 +18,8 @@ TEST_KEYS = {
     'argus_3x000000000000000000000000': {'secret': 'sk_3x000000000000000000000000', 'type': 'auto'},
     'argus_4x000000000000000000000000': {'secret': 'sk_4x000000000000000000000000', 'type': 'slider'},
     'argus_5x000000000000000000000000': {'secret': 'sk_5x000000000000000000000000', 'type': 'rotation'},
-    'argus_6x000000000000000000000000': {'secret': 'sk_6x000000000000000000000000', 'type': 'audio'}
+    'argus_6x000000000000000000000000': {'secret': 'sk_6x000000000000000000000000', 'type': 'audio'},
+    'argus_7x000000000000000000000000': {'secret': 'sk_7x000000000000000000000000', 'type': 'error'}
 }
 
 class MockTestApp:
@@ -484,11 +485,11 @@ def api_js():
     """Serves the JavaScript for the Captcha widget."""
     min_path = os.path.join(current_app.root_path, 'static', 'captcha_api.min.js')
     
-    if os.path.exists(min_path):
+    if not current_app.debug and request.args.get('raw') != '1' and os.path.exists(min_path):
         with open(min_path, 'r', encoding='utf-8') as f:
             content = f.read()
     else:
-        # Fallback for local development if build.py hasn't been run
+        # Fallback for local development or debug mode
         raw_path = os.path.join(current_app.root_path, 'templates', 'api', 'captcha_api.js')
         with open(raw_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -525,6 +526,9 @@ def get_settings():
         app = get_app_by_sitekey(site_key)
         if not app:
             return jsonify({"success": False, "error": "Invalid sitekey"}), 400
+            
+        if getattr(app, 'is_test', False) and getattr(app, 'test_type', None) == 'error':
+            return jsonify({"success": False, "error": "Service temporarily unavailable"}), 503
             
         app_theme = app.theme or 'auto'
         app_mode = app.mode or 'manual'
@@ -808,6 +812,8 @@ def challenge():
         elif app.test_type == 'audio':
             risk_score = 0.75
             requires_visual = True
+        elif app.test_type == 'error':
+            return jsonify({"success": False, "error": "Service temporarily unavailable"}), 503
         # 'auto' continues normally
         
     risk_score = min(1.0, risk_score)
