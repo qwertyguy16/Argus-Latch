@@ -166,7 +166,8 @@
             }
             const script = document.createElement('script');
             script.id = 'argus-script';
-            script.src = 'https://cdn.argusgroup.co.uk/api/v1/official-content/captcha_api.min.js?t=' + Date.now(); // Cache busting
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            script.src = (isLocal ? '/static/captcha_api.min.js' : 'https://cdn.argusgroup.co.uk/api/v1/official-content/captcha_api.min.js') + '?t=' + Date.now();
             document.body.appendChild(script);
             
             document.getElementById('result').style.display = 'none';

@@ -503,6 +503,8 @@ def get_settings():
         app_mode = cache_entry['mode']
         app_domains = cache_entry['domains']
         app_is_test = cache_entry.get('is_test', False)
+        app_strict_mode = cache_entry.get('strict_mode', False)
+        app_under_attack_mode = cache_entry.get('under_attack_mode', False)
     else:
         # Hit the database
         app = get_app_by_sitekey(site_key)
@@ -516,6 +518,8 @@ def get_settings():
         app_mode = app.mode or 'manual'
         app_domains = app.domains
         app_is_test = getattr(app, 'is_test', False)
+        app_strict_mode = getattr(app, 'strict_mode', False)
+        app_under_attack_mode = getattr(app, 'under_attack_mode', False)
         
         # Save to cache
         settings_cache[site_key] = {
@@ -523,20 +527,40 @@ def get_settings():
             'mode': app_mode,
             'domains': app_domains,
             'is_test': app_is_test,
+            'strict_mode': app_strict_mode,
+            'under_attack_mode': app_under_attack_mode,
             'timestamp': now
         }
         
     if not is_domain_authorized(app_domains, request):
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
+
+    client_ip = get_client_ip()
+    vpn_detected = check_ip_vpn(client_ip)
+
+    # Calculate dynamic PoW difficulty:
+    # Level 4: Standard clean clients ("0000" prefix, instant verification)
+    # Level 5: Elevated suspicion (VPN/Datacenter IP or strict_mode) ("00000" prefix, ~1-3s)
+    # Level 6: Under attack mode ("000000" prefix, high friction against bot swarms)
+    if app_is_test:
+        pow_difficulty = 4
+    elif app_under_attack_mode:
+        pow_difficulty = 6
+    elif vpn_detected or app_strict_mode:
+        pow_difficulty = 5
+    else:
+        pow_difficulty = 4
         
     response = jsonify({
         "success": True,
         "theme": app_theme,
         "mode": app_mode,
-        "is_test": app_is_test
+        "is_test": app_is_test,
+        "pow_difficulty": pow_difficulty,
+        "pow_prefix": "0" * pow_difficulty
     })
-    # Tell the browser to cache this for 5 minutes (drastically speeds up repeat page loads)
-    response.headers['Cache-Control'] = 'public, max-age=300'
+    # Tell browser not to cache across different client IPs/reputations
+    response.headers['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
     return response
 
 @captcha_bp.after_request
@@ -681,10 +705,43 @@ def challenge():
             db.session.rollback()
 
     # 2. Intelligence: Probabilistic Telemetry Analysis
+    client_ip = get_client_ip()
+    vpn_detected = check_ip_vpn(client_ip)
+
     risk_score = 0.0
-    
+
+    # VPN & Datacenter IP Detection
+    if vpn_detected:
+        risk_score += 0.3
+            
+    if getattr(app, 'block_vpns', False) and vpn_detected:
+        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
+        return jsonify({"success": False, "error": "VPNs and Proxies are blocked by this application."}), 403
+
+    # Modern Headless & Stealth Framework Detection
     if telemetry.get('webdriver'):
         risk_score += 1.0
+
+    if telemetry.get('stealthDetected'):
+        risk_score += 1.0
+
+    if telemetry.get('cdcFound'):
+        risk_score += 1.0
+
+    if telemetry.get('automationGlobalsFound'):
+        risk_score += 1.0
+
+    if telemetry.get('outerDimensionsZero'):
+        risk_score += 0.8
+
+    if telemetry.get('pluginsFaked'):
+        risk_score += 0.5
+
+    if telemetry.get('chromeMissing'):
+        risk_score += 0.5
+
+    if telemetry.get('screenAnomalies'):
+        risk_score += 0.4
         
     if telemetry.get('honeypot'):
         risk_score += 1.0
@@ -746,6 +803,7 @@ def challenge():
         if avg_click < 20: # Bot clicking instantly
             risk_score += 0.3
 
+    # Dynamic Proof of Work validation
     pow_data = telemetry.get('pow', {})
     if not pow_data:
         risk_score += 1.0 # No PoW provided
@@ -753,28 +811,40 @@ def challenge():
         nonce = pow_data.get('nonce')
         timestamp_pow = pow_data.get('timestamp')
         hash_hex = pow_data.get('hashHex')
+        submitted_difficulty = pow_data.get('difficulty', 4)
+
+        # Calculate expected minimum difficulty for this request:
+        if getattr(app, 'is_test', False):
+            expected_difficulty = 4
+        elif getattr(app, 'under_attack_mode', False):
+            expected_difficulty = 6
+        elif vpn_detected or getattr(app, 'strict_mode', False):
+            expected_difficulty = 5
+        else:
+            expected_difficulty = 4
         
         if nonce is None or not timestamp_pow or not hash_hex:
             risk_score += 1.0
         else:
-            if (time.time() * 1000) - timestamp_pow > 300000: # 5 minutes old
+            now_ms = time.time() * 1000
+            if (now_ms - timestamp_pow > 300000) or (timestamp_pow - now_ms > 60000): # 5 minutes old or 1 min in future
                 risk_score += 1.0
             else:
                 msg = f"{site_key}{timestamp_pow}{nonce}".encode('utf-8')
                 expected_hash = hashlib.sha256(msg).hexdigest()
-                if expected_hash != hash_hex or not hash_hex.startswith("0000"):
+                
+                # Check valid hash calculation
+                if expected_hash != hash_hex:
                     risk_score += 1.0
-
-    # 3. Intelligence: VPN & Datacenter IP Detection
-    client_ip = get_client_ip()
-    vpn_detected = check_ip_vpn(client_ip)
-    
-    if vpn_detected:
-        risk_score += 0.3
-            
-    if app.block_vpns and vpn_detected:
-        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
-        return jsonify({"success": False, "error": "VPNs and Proxies are blocked by this application."}), 403
+                
+                # Check submitted difficulty prefix
+                expected_prefix = "0" * int(submitted_difficulty)
+                if not hash_hex.startswith(expected_prefix):
+                    risk_score += 1.0
+                
+                # Check against expected difficulty (downgrade penalty)
+                if submitted_difficulty < expected_difficulty:
+                    risk_score += 0.6
 
     # Check if Visual Challenge is required
     requires_visual = False
@@ -799,10 +869,13 @@ def challenge():
         # 'auto' continues normally
         
     risk_score = min(1.0, risk_score)
-    if risk_score >= 0.85:
+    if risk_score >= 0.85 or telemetry.get('honeypot'):
         from datetime import datetime
-        stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
-        print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
+        stealth_str = f" | Stealth: {','.join(telemetry.get('stealthReasons', []))}" if telemetry.get('stealthReasons') else ""
+        pow_str = f" | PoW: diff={pow_data.get('difficulty', 4)}" if pow_data else " | PoW: None"
+        stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB{stealth_str}"
+        if current_app.debug:
+            print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
         upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
             
         return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
@@ -884,8 +957,10 @@ def challenge():
             })
 
     from datetime import datetime
-    stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
-    print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
+    pow_str = f" | PoW: diff={pow_data.get('difficulty', 4)}" if pow_data else " | PoW: None"
+    stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
+    if current_app.debug:
+        print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
     upsert_captcha_log(site_key, "PASS", risk_score, client_ip, vpn_detected, telemetry)
 
     timestamp = str(int(time.time()))
@@ -936,7 +1011,8 @@ def siteverify():
             
         timestamp = int(timestamp_str)
         if time.time() - timestamp > 300:
-            print(f"[CAPTCHA DEBUG] Token expired. Server time: {time.time()}, Token time: {timestamp}, Diff: {time.time() - timestamp}")
+            if current_app.debug:
+                print(f"[CAPTCHA DEBUG] Token expired. Server time: {time.time()}, Token time: {timestamp}, Diff: {time.time() - timestamp}")
             return jsonify({
                 "success": False,
                 "error-codes": ["timeout-or-duplicate"]
@@ -952,7 +1028,8 @@ def siteverify():
         from datetime import datetime, timedelta
         
         if ConsumedCaptchaToken.query.filter_by(signature=signature).first():
-            print(f"[CAPTCHA DEBUG] Token signature {signature} was already found in ConsumedCaptchaToken table!")
+            if current_app.debug:
+                print(f"[CAPTCHA DEBUG] Token signature {signature} was already found in ConsumedCaptchaToken table!")
             return jsonify({
                 "success": False,
                 "error-codes": ["timeout-or-duplicate"]
@@ -972,7 +1049,8 @@ def siteverify():
             logging.error(f"Failed to commit siteverify success: {e}")
             db.session.rollback()
             
-        print(f"[CAPTCHA] Siteverify Validation [PASS] (Risk: {risk_score})")
+        if current_app.debug:
+            print(f"[CAPTCHA] Siteverify Validation [PASS] (Risk: {risk_score})")
             
         return jsonify({
             "success": True,
@@ -991,7 +1069,8 @@ def siteverify():
             logging.error(f"Failed to commit siteverify failure: {ex}")
             db.session.rollback()
             
-        print(f"[CAPTCHA] Siteverify Validation [FAIL] (Reason: {str(e)})")
+        if current_app.debug:
+            print(f"[CAPTCHA] Siteverify Validation [FAIL] (Reason: {str(e)})")
             
         return jsonify({
             "success": False,
