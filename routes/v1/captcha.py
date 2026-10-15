@@ -480,25 +480,7 @@ import subprocess
 import hashlib
 from flask import current_app
 
-@captcha_bp.route('/api.js')
-def api_js():
-    """Serves the JavaScript for the Captcha widget."""
-    min_path = os.path.join(current_app.root_path, 'static', 'captcha_api.min.js')
-    
-    if not current_app.debug and request.args.get('raw') != '1' and os.path.exists(min_path):
-        with open(min_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-    else:
-        # Fallback for local development or debug mode
-        raw_path = os.path.join(current_app.root_path, 'templates', 'api', 'captcha_api.js')
-        with open(raw_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-    response = make_response(content)
-    response.headers['Content-Type'] = 'application/javascript'
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    return response
+# /api.js has been completely removed in favor of official CDN delivery
 
 settings_cache = {}
 
