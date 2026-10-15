@@ -1,7 +1,17 @@
 (function () {
     // Argus Captcha Intelligent Widget Script - Premium Version
-    const scriptSrc = document.currentScript ? document.currentScript.src : window.location.origin + '/v1/captcha';
-    const HOST = scriptSrc.split('/v1/captcha')[0];
+    // Intelligent Host Resolution (supports direct Latch domain, local dev, or CDN hosting)
+    let HOST = 'https://latch.argusgroup.co.uk';
+    if (document.currentScript && document.currentScript.getAttribute('data-host')) {
+        HOST = document.currentScript.getAttribute('data-host').replace(/\/+$/, '');
+    } else {
+        const scriptSrc = document.currentScript ? document.currentScript.src : '';
+        if (scriptSrc.includes('/v1/captcha')) {
+            HOST = scriptSrc.split('/v1/captcha')[0];
+        } else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            HOST = window.location.origin;
+        }
+    }
 
     // Telemetry Collection
     let telemetryData = {
