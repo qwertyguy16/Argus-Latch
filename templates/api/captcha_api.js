@@ -458,7 +458,7 @@
                 justify-content: center;
             `;
             // Subtle lock or shield icon to look like a brand logo (like recaptcha loop)
-            logoImgContainer.innerHTML = `<img src="https://argusgroup.co.uk/static/images/Logo${theme === 'dark' ? 'white' : 'black'}.png" style="width: 42px; height: 42px; object-fit: contain;" alt="Argus Logo">`;
+            logoImgContainer.innerHTML = `<img src="https://cdn.argusgroup.co.uk/api/v1/official-content/Argus%20Group%20Logo%20${theme === 'dark' ? 'White' : 'Black'}.png" style="width: 42px; height: 42px; object-fit: contain;" alt="Argus Logo">`;
 
             brand.innerText = "Argus";
             brand.style.cssText = `
@@ -517,7 +517,7 @@
                 `;
 
                 const badgeIcon = document.createElement('div');
-                badgeIcon.innerHTML = `<img src="https://argusgroup.co.uk/static/images/Logo${theme === 'dark' ? 'white' : 'black'}.png" style="width: 24px; height: 24px; object-fit: contain;" alt="Argus Logo">`;
+                badgeIcon.innerHTML = `<img src="https://cdn.argusgroup.co.uk/api/v1/official-content/Argus%20Group%20Logo%20${theme === 'dark' ? 'White' : 'Black'}.png" style="width: 24px; height: 24px; object-fit: contain;" alt="Argus Logo">`;
                 badgeIcon.style.cssText = `
                     min-width: 24px;
                     height: 24px;
