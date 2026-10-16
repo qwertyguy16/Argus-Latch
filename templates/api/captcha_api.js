@@ -190,7 +190,7 @@
     // =========================================================================
     const ArgusVM = (function () {
         // Polymorphic Opcode Seed (randomized per build)
-        const _VM_SEED = 0x0B;
+        const _VM_SEED = 0x18;
 
         // Base opcode mnemonics
         const _OP_BASE = [
@@ -1062,6 +1062,10 @@
 
             let isProcessing = false;
             let isFailed = false;
+            let currentVisualData = null;
+            let currentAudioData = null;
+            let activeAudioObj = null;
+            let isSwitchingChallenge = false;
 
             widget.onmouseenter = () => {
                 if (!isVerified && !isProcessing && !isFailed) {
@@ -1492,6 +1496,11 @@
                 if (document.body.contains(visualOverlay)) {
                     visualOverlay.remove();
                 }
+                if (activeAudioObj) {
+                    try { activeAudioObj.pause(); activeAudioObj.currentTime = 0; } catch (_) {}
+                    activeAudioObj = null;
+                }
+                isSwitchingChallenge = false;
                 if (isVerified || container.dataset.verified === "true") return;
                 isProcessing = false;
                 isFailed = false;
@@ -1941,6 +1950,14 @@
                 if (isVerified || container.dataset.verified === "true") return;
                 if (isProcessing || isFailed) return; // prevent spamming clicks
 
+                currentVisualData = null;
+                currentAudioData = null;
+                isSwitchingChallenge = false;
+                if (activeAudioObj) {
+                    try { activeAudioObj.pause(); } catch (_) {}
+                    activeAudioObj = null;
+                }
+
                 isProcessing = true;
                 if (mode === 'manual') {
                     box.style.display = 'none';
@@ -2035,21 +2052,94 @@
                         subText.innerText = "Please solve the challenge below.";
                         subText.style.display = 'block';
 
-                        visualContainer.innerHTML = ''; // clear
+                        currentVisualData = (data.visual_type !== 'audio') ? data : null;
+                        currentAudioData = (data.visual_type === 'audio') ? data : null;
+
+                        const onSwitchToVisual = () => {
+                            if (isSwitchingChallenge) return;
+                            if (!currentVisualData) return;
+                            isSwitchingChallenge = true;
+
+                            if (activeAudioObj) {
+                                try {
+                                    activeAudioObj.pause();
+                                    activeAudioObj.currentTime = 0;
+                                } catch (_) {}
+                                activeAudioObj = null;
+                            }
+
+                            visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                            visualContainer.style.opacity = '0';
+                            visualContainer.style.transform = 'scale(0.97)';
+
+                            setTimeout(() => {
+                                renderVisualChallenge(currentVisualData);
+                                visualContainer.style.opacity = '1';
+                                visualContainer.style.transform = 'scale(1)';
+                                isSwitchingChallenge = false;
+                            }, 150);
+                        };
+
+                        const onSwitchToAudio = async () => {
+                            if (isSwitchingChallenge) return;
+                            isSwitchingChallenge = true;
+
+                            visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                            visualContainer.style.opacity = '0';
+                            visualContainer.style.transform = 'scale(0.97)';
+
+                            setTimeout(async () => {
+                                if (currentAudioData && currentAudioData.audio) {
+                                    renderAudioUI(currentAudioData, true);
+                                    visualContainer.style.opacity = '1';
+                                    visualContainer.style.transform = 'scale(1)';
+                                    isSwitchingChallenge = false;
+                                    return;
+                                }
+
+                                renderAudioLoading();
+                                visualContainer.style.opacity = '1';
+                                visualContainer.style.transform = 'scale(1)';
+                                try {
+                                    const aRes = await fetch(`${HOST}/v1/captcha/audio-challenge`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ sitekey: sitekey })
+                                    });
+                                    const aData = await aRes.json();
+                                    if (aData.audio) {
+                                        currentAudioData = aData;
+                                        visualContainer.style.opacity = '0';
+                                        visualContainer.style.transform = 'scale(0.97)';
+                                        setTimeout(() => {
+                                            renderAudioUI(aData, true);
+                                            visualContainer.style.opacity = '1';
+                                            visualContainer.style.transform = 'scale(1)';
+                                            isSwitchingChallenge = false;
+                                        }, 120);
+                                    } else {
+                                        renderAudioError(aData.error || 'Failed to load audio challenge');
+                                        isSwitchingChallenge = false;
+                                    }
+                                } catch (e) {
+                                    renderAudioError('Network error loading audio challenge');
+                                    isSwitchingChallenge = false;
+                                }
+                            }, 150);
+                        };
+
+                        const renderAudioLoading = () => {
+                            visualContainer.innerHTML = '';
+                            renderModalHeader("Audio Challenge", "Preparing audio challenge...", null, null);
+                            const loadDiv = document.createElement('div');
+                            loadDiv.style.cssText = `padding: 40px 20px; text-align: center; color: ${colors.subText}; font-size: 14px; font-family: inherit;`;
+                            loadDiv.innerHTML = `<div style="display:inline-block;width:32px;height:32px;border:3px solid #3b82f6;border-top:3px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;margin-bottom:12px;"></div><div>Synthesizing audio challenge...</div>`;
+                            visualContainer.appendChild(loadDiv);
+                        };
 
                         const renderAudioError = (errorMsg) => {
                             visualContainer.innerHTML = '';
-                            renderModalHeader("Audio Challenge", "Accessibility verification", 'visual', () => {
-                                isProcessing = false;
-                                visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
-                                visualContainer.style.opacity = '0';
-                                visualContainer.style.transform = 'scale(0.97)';
-                                setTimeout(() => {
-                                    executeChallenge();
-                                    visualContainer.style.opacity = '1';
-                                    visualContainer.style.transform = 'scale(1)';
-                                }, 150);
-                            });
+                            renderModalHeader("Audio Challenge", "Accessibility verification", currentVisualData ? 'visual' : null, onSwitchToVisual);
 
                             const errBox = document.createElement('div');
                             errBox.style.cssText = `
@@ -2088,7 +2178,7 @@
                                 color: ${colors.subText};
                                 margin-bottom: 20px;
                             `;
-                            subDiv.innerText = "You can retry loading audio or return to visual verification.";
+                            subDiv.innerText = currentVisualData ? "You can retry loading audio or return to visual verification." : "Please try again later or reload the page.";
 
                             const btnRow = document.createElement('div');
                             btnRow.style.cssText = `
@@ -2115,38 +2205,29 @@
                             retryBtn.onmouseover = () => { retryBtn.style.background = '#2563eb'; };
                             retryBtn.onmouseout = () => { retryBtn.style.background = '#3b82f6'; };
                             retryBtn.onclick = () => { onSwitchToAudio(); };
-
-                            const backBtn = document.createElement('button');
-                            backBtn.type = 'button';
-                            backBtn.innerText = 'Back to Visual';
-                            backBtn.style.cssText = `
-                                flex: 1;
-                                padding: 10px 14px;
-                                background: ${colors.boxBg};
-                                color: ${colors.text};
-                                border: 1px solid ${colors.boxBorder};
-                                border-radius: 8px;
-                                font-size: 13.5px;
-                                font-weight: 600;
-                                cursor: pointer;
-                                transition: background 0.2s, border-color 0.2s;
-                            `;
-                            backBtn.onmouseover = () => { backBtn.style.borderColor = '#3b82f6'; };
-                            backBtn.onmouseout = () => { backBtn.style.borderColor = colors.boxBorder; };
-                            backBtn.onclick = () => {
-                                isProcessing = false;
-                                visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
-                                visualContainer.style.opacity = '0';
-                                visualContainer.style.transform = 'scale(0.97)';
-                                setTimeout(() => {
-                                    executeChallenge();
-                                    visualContainer.style.opacity = '1';
-                                    visualContainer.style.transform = 'scale(1)';
-                                }, 150);
-                            };
-
                             btnRow.appendChild(retryBtn);
-                            btnRow.appendChild(backBtn);
+
+                            if (currentVisualData) {
+                                const backBtn = document.createElement('button');
+                                backBtn.type = 'button';
+                                backBtn.innerText = 'Back to Visual';
+                                backBtn.style.cssText = `
+                                    flex: 1;
+                                    padding: 10px 14px;
+                                    background: ${colors.boxBg};
+                                    color: ${colors.text};
+                                    border: 1px solid ${colors.boxBorder};
+                                    border-radius: 8px;
+                                    font-size: 13.5px;
+                                    font-weight: 600;
+                                    cursor: pointer;
+                                    transition: background 0.2s, border-color 0.2s;
+                                `;
+                                backBtn.onmouseover = () => { backBtn.style.borderColor = '#3b82f6'; };
+                                backBtn.onmouseout = () => { backBtn.style.borderColor = colors.boxBorder; };
+                                backBtn.onclick = () => { onSwitchToVisual(); };
+                                btnRow.appendChild(backBtn);
+                            }
 
                             errBox.appendChild(iconDiv);
                             errBox.appendChild(msgDiv);
@@ -2155,68 +2236,15 @@
                             visualContainer.appendChild(errBox);
                         };
 
-                        const onSwitchToAudio = async () => {
-                            visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
-                            visualContainer.style.opacity = '0';
-                            visualContainer.style.transform = 'scale(0.97)';
-                            
-                            setTimeout(async () => {
-                                renderAudioLoading();
-                                visualContainer.style.opacity = '1';
-                                visualContainer.style.transform = 'scale(1)';
-                                try {
-                                    const aRes = await fetch(`${HOST}/v1/captcha/audio-challenge`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ sitekey: sitekey })
-                                    });
-                                    const aData = await aRes.json();
-                                    if (aData.audio) {
-                                        visualContainer.style.opacity = '0';
-                                        visualContainer.style.transform = 'scale(0.97)';
-                                        setTimeout(() => {
-                                            renderAudioUI(aData, true);
-                                            visualContainer.style.opacity = '1';
-                                            visualContainer.style.transform = 'scale(1)';
-                                        }, 120);
-                                    } else {
-                                        renderAudioError(aData.error || 'Failed to load audio challenge');
-                                    }
-                                } catch (e) {
-                                    renderAudioError('Network error loading audio challenge');
-                                }
-                            }, 150);
-                        };
-
-                        const renderAudioLoading = () => {
-                            visualContainer.innerHTML = '';
-                            renderModalHeader("Audio Challenge", "Preparing audio challenge...", null, null);
-                            const loadDiv = document.createElement('div');
-                            loadDiv.style.cssText = `padding: 40px 20px; text-align: center; color: ${colors.subText}; font-size: 14px; font-family: inherit;`;
-                            loadDiv.innerHTML = `<div style="display:inline-block;width:32px;height:32px;border:3px solid #3b82f6;border-top:3px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;margin-bottom:12px;"></div><div>Synthesizing audio challenge...</div>`;
-                            visualContainer.appendChild(loadDiv);
-                        };
-
                         const renderAudioUI = (aData, isSwitchedFromVisual = false) => {
                             visualContainer.innerHTML = '';
-                            const isAudioOnly = (aData.audio_only === true) || (!isSwitchedFromVisual);
+                            const canSwitchToVisual = Boolean(currentVisualData) && (aData.audio_only !== true);
 
                             renderModalHeader(
-                                isAudioOnly ? "Audio Verification" : "Audio Challenge",
-                                isAudioOnly ? "Security verification: Listen and enter the numbers heard." : "Listen to the numbers and enter them below.",
-                                isAudioOnly ? null : 'visual',
-                                () => {
-                                    if (audioObj) audioObj.pause();
-                                    isProcessing = false;
-                                    visualContainer.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
-                                    visualContainer.style.opacity = '0';
-                                    visualContainer.style.transform = 'scale(0.97)';
-                                    setTimeout(() => {
-                                        executeChallenge();
-                                        visualContainer.style.opacity = '1';
-                                        visualContainer.style.transform = 'scale(1)';
-                                    }, 150);
-                                }
+                                !canSwitchToVisual ? "Audio Verification" : "Audio Challenge",
+                                !canSwitchToVisual ? "Security verification: Listen and enter the numbers heard." : "Listen to the numbers and enter them below.",
+                                canSwitchToVisual ? 'visual' : null,
+                                onSwitchToVisual
                             );
 
                             const audioCard = document.createElement('div');
@@ -2270,6 +2298,7 @@
                             let audioObj = null;
                             try {
                                 audioObj = new Audio("data:audio/wav;base64," + aData.audio);
+                                activeAudioObj = audioObj;
                             } catch (e) {
                             }
 
@@ -2363,16 +2392,16 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        if (audioObj) audioObj.pause();
+                                        if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
                                         injectToken(visData.token);
                                         closeModal();
                                     } else {
-                                        if (audioObj) audioObj.pause();
+                                        if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
                                         closeModal();
                                         triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
-                                    if (audioObj) audioObj.pause();
+                                    if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
                                     closeModal();
                                     triggerError('Validation failed', false);
                                 }
@@ -2391,401 +2420,404 @@
                             }, 250);
                         };
 
-                        if (data.visual_type === 'audio') {
-                            renderAudioUI(data, false);
-                            return;
-                        }
+                        const renderVisualChallenge = (vData) => {
+                            visualContainer.innerHTML = '';
+                            const headerInfo = renderModalHeader(
+                                "Security Challenge",
+                                "",
+                                'audio',
+                                onSwitchToAudio
+                            );
 
-                        // Universal Header for all current and future visual challenges
-                        const headerInfo = renderModalHeader(
-                            "Security Challenge",
-                            "",
-                            'audio',
-                            onSwitchToAudio
-                        );
+                            if (vData.visual_type === 'slider') {
+                                headerInfo.descEl.innerText = "Drag the slider to fit the puzzle piece.";
+                                const bgContainer = document.createElement('div');
+                                bgContainer.style.cssText = `position: relative; width: 100%; height: 150px; background-image: url(data:image/png;base64,${vData.bg_image}); background-size: 100% 100%; border-radius: 8px; overflow: hidden; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
 
-                        if (data.visual_type === 'slider') {
-                            headerInfo.descEl.innerText = "Drag the slider to fit the puzzle piece.";
-                            const bgContainer = document.createElement('div');
-                            bgContainer.style.cssText = `position: relative; width: 100%; height: 150px; background-image: url(data:image/png;base64,${data.bg_image}); background-size: 100% 100%; border-radius: 8px; overflow: hidden; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
+                                const pieceImg = document.createElement('img');
+                                pieceImg.src = "data:image/png;base64," + vData.piece_image;
+                                pieceImg.style.cssText = `position: absolute; top: ${vData.piece_y}px; left: 0px; width: 12.5%; height: 40px; z-index: 2; pointer-events: none; border-radius: 5px;`;
+                                bgContainer.appendChild(pieceImg);
 
-                            const pieceImg = document.createElement('img');
-                            pieceImg.src = "data:image/png;base64," + data.piece_image;
-                            pieceImg.style.cssText = `position: absolute; top: ${data.piece_y}px; left: 0px; width: 12.5%; height: 40px; z-index: 2; pointer-events: none; border-radius: 5px;`;
-                            bgContainer.appendChild(pieceImg);
+                                const sliderTrack = document.createElement('div');
+                                sliderTrack.style.cssText = `position: relative; width: 100%; height: 42px; background: ${colors.boxBg}; border: 1px solid ${colors.boxBorder}; border-radius: 21px; margin-top: 16px; box-sizing: border-box; overflow: hidden;`;
 
-                            const sliderTrack = document.createElement('div');
-                            sliderTrack.style.cssText = `position: relative; width: 100%; height: 42px; background: ${colors.boxBg}; border: 1px solid ${colors.boxBorder}; border-radius: 21px; margin-top: 16px; box-sizing: border-box; overflow: hidden;`;
+                                const sliderFill = document.createElement('div');
+                                sliderFill.style.cssText = `position: absolute; top: 0; left: 0; height: 100%; width: 0; background: #3b82f6; opacity: 0.2; border-radius: 21px 0 0 21px;`;
+                                sliderTrack.appendChild(sliderFill);
 
-                            const sliderFill = document.createElement('div');
-                            sliderFill.style.cssText = `position: absolute; top: 0; left: 0; height: 100%; width: 0; background: #3b82f6; opacity: 0.2; border-radius: 21px 0 0 21px;`;
-                            sliderTrack.appendChild(sliderFill);
+                                const sliderHandle = document.createElement('div');
+                                sliderHandle.style.cssText = `position: absolute; top: 0; left: 0; width: 48px; height: 100%; background: #3b82f6; border-radius: 21px; cursor: grab; display: flex; justify-content: center; align-items: center; color: white; transition: background 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.25); user-select: none; font-size: 18px; box-sizing: border-box;`;
+                                sliderHandle.innerHTML = '&#8594;';
+                                sliderTrack.appendChild(sliderHandle);
 
-                            const sliderHandle = document.createElement('div');
-                            sliderHandle.style.cssText = `position: absolute; top: 0; left: 0; width: 48px; height: 100%; background: #3b82f6; border-radius: 21px; cursor: grab; display: flex; justify-content: center; align-items: center; color: white; transition: background 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.25); user-select: none; font-size: 18px; box-sizing: border-box;`;
-                            sliderHandle.innerHTML = '&#8594;'; // right arrow
-                            sliderTrack.appendChild(sliderHandle);
+                                visualContainer.appendChild(bgContainer);
+                                visualContainer.appendChild(sliderTrack);
+                                showModal();
 
-                            visualContainer.appendChild(bgContainer);
-                            visualContainer.appendChild(sliderTrack);
-                            showModal();
+                                const visualTicket = vData.visual_ticket;
+                                let isDragging = false;
+                                let startX = 0;
+                                let currentX = 0;
+                                let maxTravel = 0;
 
-                            const visualTicket = data.visual_ticket;
-                            let isDragging = false;
-                            let startX = 0;
-                            let currentX = 0;
-                            let maxTravel = 0;
+                                const onMove = (e) => {
+                                    if (!isDragging) return;
+                                    let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                                    let deltaX = clientX - startX;
+                                    currentX = Math.max(0, Math.min(deltaX, maxTravel));
+                                    sliderHandle.style.left = currentX + 'px';
+                                    pieceImg.style.left = currentX + 'px';
+                                    sliderFill.style.width = (currentX + (sliderHandle.clientWidth / 2)) + 'px';
+                                    e.preventDefault();
+                                };
 
-                            const onMove = (e) => {
-                                if (!isDragging) return;
-                                let clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                                let deltaX = clientX - startX;
-                                currentX = Math.max(0, Math.min(deltaX, maxTravel));
-                                sliderHandle.style.left = currentX + 'px';
-                                pieceImg.style.left = currentX + 'px';
-                                sliderFill.style.width = (currentX + (sliderHandle.clientWidth / 2)) + 'px';
-                                e.preventDefault(); // prevent scrolling
-                            };
+                                const onEnd = async () => {
+                                    if (!isDragging) return;
+                                    isDragging = false;
+                                    document.removeEventListener('mousemove', onMove);
+                                    document.removeEventListener('mouseup', onEnd);
+                                    document.removeEventListener('touchmove', onMove);
+                                    document.removeEventListener('touchend', onEnd);
+                                    sliderHandle.style.cursor = 'grab';
 
-                            const onEnd = async () => {
-                                if (!isDragging) return;
-                                isDragging = false;
-                                document.removeEventListener('mousemove', onMove);
-                                document.removeEventListener('mouseup', onEnd);
-                                document.removeEventListener('touchmove', onMove);
-                                document.removeEventListener('touchend', onEnd);
-                                sliderHandle.style.cursor = 'grab';
-
-                                // Submit
-                                sliderHandle.innerHTML = `<div style="width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;"></div>`;
-                                try {
-                                    // Map currentX back to the native 320px scale backend expects
-                                    const nativeAnswer = currentX * (320 / sliderTrack.clientWidth);
-                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            sitekey: sitekey,
-                                            visual_ticket: visualTicket,
-                                            answer: nativeAnswer.toString()
-                                        })
-                                    });
-                                    const visData = await vRes.json();
-                                    if (visData.success && visData.token) {
-                                        injectToken(visData.token);
-                                        closeModal();
-                                    } else {
+                                    sliderHandle.innerHTML = `<div style="width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;"></div>`;
+                                    try {
+                                        const nativeAnswer = currentX * (320 / sliderTrack.clientWidth);
+                                        const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                sitekey: sitekey,
+                                                visual_ticket: visualTicket,
+                                                answer: nativeAnswer.toString()
+                                            })
+                                        });
+                                        const visData = await vRes.json();
+                                        if (visData.success && visData.token) {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            injectToken(visData.token);
+                                            closeModal();
+                                        } else {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            closeModal();
+                                            triggerError('Validation failed', false);
+                                        }
+                                    } catch (e) {
+                                        if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
                                         closeModal();
                                         triggerError('Validation failed', false);
                                     }
-                                } catch (e) {
-                                    closeModal();
-                                    triggerError('Validation failed', false);
-                                }
-                            };
+                                };
 
-                            const onStart = (e) => {
-                                isDragging = true;
-                                maxTravel = sliderTrack.clientWidth - sliderHandle.clientWidth;
-                                startX = (e.touches ? e.touches[0].clientX : e.clientX) - currentX;
-                                sliderHandle.style.cursor = 'grabbing';
-                                sliderHandle.style.transition = 'none';
-                                pieceImg.style.transition = 'none';
-                                sliderFill.style.transition = 'none';
-                                document.addEventListener('mousemove', onMove);
-                                document.addEventListener('mouseup', onEnd);
-                                document.addEventListener('touchmove', onMove, { passive: false });
-                                document.addEventListener('touchend', onEnd);
-                                e.preventDefault();
-                            };
+                                const onStart = (e) => {
+                                    isDragging = true;
+                                    maxTravel = sliderTrack.clientWidth - sliderHandle.clientWidth;
+                                    startX = (e.touches ? e.touches[0].clientX : e.clientX) - currentX;
+                                    sliderHandle.style.cursor = 'grabbing';
+                                    sliderHandle.style.transition = 'none';
+                                    pieceImg.style.transition = 'none';
+                                    sliderFill.style.transition = 'none';
+                                    document.addEventListener('mousemove', onMove);
+                                    document.addEventListener('mouseup', onEnd);
+                                    document.addEventListener('touchmove', onMove, { passive: false });
+                                    document.addEventListener('touchend', onEnd);
+                                    e.preventDefault();
+                                };
 
-                            sliderHandle.addEventListener('mousedown', onStart);
-                            sliderHandle.addEventListener('touchstart', onStart, { passive: false });
+                                sliderHandle.addEventListener('mousedown', onStart);
+                                sliderHandle.addEventListener('touchstart', onStart, { passive: false });
 
-                        } else if (data.visual_type === 'rotation') {
-                            headerInfo.descEl.innerText = "Rotate the object until it is right-side up.";
+                            } else if (vData.visual_type === 'rotation') {
+                                headerInfo.descEl.innerText = "Rotate the object until it is right-side up.";
 
-                            const rotWrapper = document.createElement('div');
-                            rotWrapper.style.cssText = `
-                                display: flex;
-                                flex-direction: column;
-                                align-items: center;
-                                justify-content: center;
-                                width: 100%;
-                                box-sizing: border-box;
-                            `;
+                                const rotWrapper = document.createElement('div');
+                                rotWrapper.style.cssText = `
+                                    display: flex;
+                                    flex-direction: column;
+                                    align-items: center;
+                                    justify-content: center;
+                                    width: 100%;
+                                    box-sizing: border-box;
+                                `;
 
-                            const frameContainer = document.createElement('div');
-                            frameContainer.style.cssText = `
-                                position: relative;
-                                display: inline-block;
-                                margin: 10px auto 16px auto;
-                                box-sizing: border-box;
-                            `;
+                                const frameContainer = document.createElement('div');
+                                frameContainer.style.cssText = `
+                                    position: relative;
+                                    display: inline-block;
+                                    margin: 10px auto 16px auto;
+                                    box-sizing: border-box;
+                                `;
 
-                            const topMarker = document.createElement('div');
-                            topMarker.title = "Top orientation indicator";
-                            topMarker.style.cssText = `
-                                position: absolute;
-                                top: -8px;
-                                left: 50%;
-                                transform: translateX(-50%);
-                                width: 0;
-                                height: 0;
-                                border-left: 6px solid transparent;
-                                border-right: 6px solid transparent;
-                                border-top: 7px solid #3b82f6;
-                                z-index: 10;
-                                filter: drop-shadow(0 1px 2px rgba(59, 130, 246, 0.5));
-                            `;
+                                const topMarker = document.createElement('div');
+                                topMarker.title = "Top orientation indicator";
+                                topMarker.style.cssText = `
+                                    position: absolute;
+                                    top: -8px;
+                                    left: 50%;
+                                    transform: translateX(-50%);
+                                    width: 0;
+                                    height: 0;
+                                    border-left: 6px solid transparent;
+                                    border-right: 6px solid transparent;
+                                    border-top: 7px solid #3b82f6;
+                                    z-index: 10;
+                                    filter: drop-shadow(0 1px 2px rgba(59, 130, 246, 0.5));
+                                `;
 
-                            // Circular preview frame
-                            const imgFrame = document.createElement('div');
-                            imgFrame.style.cssText = `
-                                position: relative;
-                                width: 172px;
-                                height: 172px;
-                                border-radius: 50%;
-                                background: ${colors.boxBg};
-                                border: 2px solid ${colors.border};
-                                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-                                overflow: hidden;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                box-sizing: border-box;
-                            `;
+                                const imgFrame = document.createElement('div');
+                                imgFrame.style.cssText = `
+                                    position: relative;
+                                    width: 172px;
+                                    height: 172px;
+                                    border-radius: 50%;
+                                    background: ${colors.boxBg};
+                                    border: 2px solid ${colors.border};
+                                    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+                                    overflow: hidden;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    box-sizing: border-box;
+                                `;
 
-                            const rotImg = document.createElement('img');
-                            rotImg.src = "data:image/png;base64," + data.image;
-                            rotImg.style.cssText = `
-                                width: 100%;
-                                height: 100%;
-                                border-radius: 50%;
-                                user-select: none;
-                                -webkit-user-drag: none;
-                                pointer-events: none;
-                                transform-origin: 50% 50%;
-                                transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
-                            `;
-                            imgFrame.appendChild(rotImg);
-                            frameContainer.appendChild(topMarker);
-                            frameContainer.appendChild(imgFrame);
-                            rotWrapper.appendChild(frameContainer);
+                                const rotImg = document.createElement('img');
+                                rotImg.src = "data:image/png;base64," + vData.image;
+                                rotImg.style.cssText = `
+                                    width: 100%;
+                                    height: 100%;
+                                    border-radius: 50%;
+                                    user-select: none;
+                                    -webkit-user-drag: none;
+                                    pointer-events: none;
+                                    transform-origin: 50% 50%;
+                                    transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
+                                `;
+                                imgFrame.appendChild(rotImg);
+                                frameContainer.appendChild(topMarker);
+                                frameContainer.appendChild(imgFrame);
+                                rotWrapper.appendChild(frameContainer);
 
-                            let currentAngle = 0;
+                                let currentAngle = 0;
 
-                            const updateRotation = (angle, animate = true) => {
-                                currentAngle = ((angle % 360) + 360) % 360;
-                                rotImg.style.transition = animate ? 'transform 0.15s cubic-bezier(0.2, 0, 0, 1)' : 'none';
-                                rotImg.style.transform = `rotate(${currentAngle}deg)`;
-                                slider.value = currentAngle;
-                            };
+                                const updateRotation = (angle, animate = true) => {
+                                    currentAngle = ((angle % 360) + 360) % 360;
+                                    rotImg.style.transition = animate ? 'transform 0.15s cubic-bezier(0.2, 0, 0, 1)' : 'none';
+                                    rotImg.style.transform = `rotate(${currentAngle}deg)`;
+                                    slider.value = currentAngle;
+                                };
 
-                            // Button controls container
-                            const controlsRow = document.createElement('div');
-                            controlsRow.style.cssText = `
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                gap: 20px;
-                                width: 100%;
-                                margin-bottom: 14px;
-                                box-sizing: border-box;
-                            `;
+                                const controlsRow = document.createElement('div');
+                                controlsRow.style.cssText = `
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    gap: 20px;
+                                    width: 100%;
+                                    margin-bottom: 14px;
+                                    box-sizing: border-box;
+                                `;
 
-                            const createRotateBtn = (svgPath, delta, label) => {
-                                const btn = document.createElement('button');
-                                btn.type = 'button';
-                                btn.title = label;
-                                btn.innerHTML = svgPath;
-                                btn.style.cssText = `
-                                    width: 44px !important;
-                                    height: 44px !important;
-                                    min-width: 44px !important;
-                                    min-height: 44px !important;
-                                    padding: 0 !important;
-                                    margin: 0 !important;
-                                    border-radius: 50% !important;
-                                    background: ${colors.boxBg} !important;
-                                    border: 1px solid ${colors.border} !important;
-                                    color: ${colors.text} !important;
-                                    display: inline-flex !important;
-                                    align-items: center !important;
-                                    justify-content: center !important;
+                                const createRotateBtn = (svgPath, delta, label) => {
+                                    const btn = document.createElement('button');
+                                    btn.type = 'button';
+                                    btn.title = label;
+                                    btn.innerHTML = svgPath;
+                                    btn.style.cssText = `
+                                        width: 44px !important;
+                                        height: 44px !important;
+                                        min-width: 44px !important;
+                                        min-height: 44px !important;
+                                        padding: 0 !important;
+                                        margin: 0 !important;
+                                        border-radius: 50% !important;
+                                        background: ${colors.boxBg} !important;
+                                        border: 1px solid ${colors.border} !important;
+                                        color: ${colors.text} !important;
+                                        display: inline-flex !important;
+                                        align-items: center !important;
+                                        justify-content: center !important;
+                                        cursor: pointer !important;
+                                        transition: all 0.2s ease !important;
+                                        box-shadow: 0 2px 4px rgba(0,0,0,0.06) !important;
+                                        box-sizing: border-box !important;
+                                        outline: none !important;
+                                    `;
+                                    btn.onmouseover = () => {
+                                        btn.style.borderColor = '#3b82f6';
+                                        btn.style.color = '#3b82f6';
+                                        btn.style.transform = 'scale(1.08)';
+                                    };
+                                    btn.onmouseout = () => {
+                                        btn.style.borderColor = colors.border;
+                                        btn.style.color = colors.text;
+                                        btn.style.transform = 'scale(1)';
+                                    };
+                                    btn.onclick = () => {
+                                        updateRotation(currentAngle + delta, true);
+                                    };
+                                    return btn;
+                                };
+
+                                const btnLeft = createRotateBtn(
+                                    `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+                                    -30,
+                                    "Rotate left 30 degrees"
+                                );
+
+                                const btnRight = createRotateBtn(
+                                    `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+                                    30,
+                                    "Rotate right 30 degrees"
+                                );
+
+                                controlsRow.appendChild(btnLeft);
+                                controlsRow.appendChild(btnRight);
+                                rotWrapper.appendChild(controlsRow);
+
+                                const sliderContainer = document.createElement('div');
+                                sliderContainer.style.cssText = `
+                                    width: 100%;
+                                    display: flex;
+                                    align-items: center;
+                                    margin-bottom: 18px;
+                                    box-sizing: border-box;
+                                `;
+
+                                const slider = document.createElement('input');
+                                slider.type = 'range';
+                                slider.min = '0';
+                                slider.max = '360';
+                                slider.step = '1';
+                                slider.value = '0';
+                                slider.style.cssText = `
+                                    width: 100% !important;
                                     cursor: pointer !important;
-                                    transition: all 0.2s ease !important;
-                                    box-shadow: 0 2px 4px rgba(0,0,0,0.06) !important;
+                                    accent-color: #3b82f6 !important;
+                                    margin: 0 !important;
+                                    box-sizing: border-box !important;
+                                `;
+                                slider.oninput = (e) => {
+                                    updateRotation(parseFloat(e.target.value), false);
+                                };
+                                sliderContainer.appendChild(slider);
+                                rotWrapper.appendChild(sliderContainer);
+
+                                const verifyBtn = document.createElement('button');
+                                verifyBtn.type = 'button';
+                                verifyBtn.innerText = 'Verify';
+                                verifyBtn.style.cssText = `
+                                    width: 100% !important;
+                                    padding: 12px !important;
+                                    margin: 0 !important;
+                                    background: #3b82f6 !important;
+                                    color: white !important;
+                                    border: none !important;
+                                    border-radius: 10px !important;
+                                    font-size: 15px !important;
+                                    font-weight: 600 !important;
+                                    cursor: pointer !important;
+                                    transition: background 0.2s, transform 0.1s !important;
+                                    box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important;
                                     box-sizing: border-box !important;
                                     outline: none !important;
+                                    display: block !important;
                                 `;
-                                btn.onmouseover = () => {
-                                    btn.style.borderColor = '#3b82f6';
-                                    btn.style.color = '#3b82f6';
-                                    btn.style.transform = 'scale(1.08)';
-                                };
-                                btn.onmouseout = () => {
-                                    btn.style.borderColor = colors.border;
-                                    btn.style.color = colors.text;
-                                    btn.style.transform = 'scale(1)';
-                                };
-                                btn.onclick = () => {
-                                    updateRotation(currentAngle + delta, true);
-                                };
-                                return btn;
-                            };
+                                verifyBtn.onmouseover = () => { verifyBtn.style.background = '#2563eb'; };
+                                verifyBtn.onmouseout = () => { verifyBtn.style.background = '#3b82f6'; };
 
-                            // Left rotate button (-30 deg)
-                            const btnLeft = createRotateBtn(
-                                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
-                                -30,
-                                "Rotate left 30 degrees"
-                            );
+                                const visualTicket = vData.visual_ticket;
 
-                            // Right rotate button (+30 deg)
-                            const btnRight = createRotateBtn(
-                                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex-shrink:0;"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
-                                30,
-                                "Rotate right 30 degrees"
-                            );
-
-                            controlsRow.appendChild(btnLeft);
-                            controlsRow.appendChild(btnRight);
-                            rotWrapper.appendChild(controlsRow);
-
-                            // Slider container for smooth adjustment
-                            const sliderContainer = document.createElement('div');
-                            sliderContainer.style.cssText = `
-                                width: 100%;
-                                display: flex;
-                                align-items: center;
-                                margin-bottom: 18px;
-                                box-sizing: border-box;
-                            `;
-
-                            const slider = document.createElement('input');
-                            slider.type = 'range';
-                            slider.min = '0';
-                            slider.max = '360';
-                            slider.step = '1';
-                            slider.value = '0';
-                            slider.style.cssText = `
-                                width: 100% !important;
-                                cursor: pointer !important;
-                                accent-color: #3b82f6 !important;
-                                margin: 0 !important;
-                                box-sizing: border-box !important;
-                            `;
-                            slider.oninput = (e) => {
-                                updateRotation(parseFloat(e.target.value), false);
-                            };
-                            sliderContainer.appendChild(slider);
-                            rotWrapper.appendChild(sliderContainer);
-
-                            // Verify Button
-                            const verifyBtn = document.createElement('button');
-                            verifyBtn.type = 'button';
-                            verifyBtn.innerText = 'Verify';
-                            verifyBtn.style.cssText = `
-                                width: 100% !important;
-                                padding: 12px !important;
-                                margin: 0 !important;
-                                background: #3b82f6 !important;
-                                color: white !important;
-                                border: none !important;
-                                border-radius: 10px !important;
-                                font-size: 15px !important;
-                                font-weight: 600 !important;
-                                cursor: pointer !important;
-                                transition: background 0.2s, transform 0.1s !important;
-                                box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important;
-                                box-sizing: border-box !important;
-                                outline: none !important;
-                                display: block !important;
-                            `;
-                            verifyBtn.onmouseover = () => { verifyBtn.style.background = '#2563eb'; };
-                            verifyBtn.onmouseout = () => { verifyBtn.style.background = '#3b82f6'; };
-
-                            const visualTicket = data.visual_ticket;
-
-                            verifyBtn.onclick = async () => {
-                                verifyBtn.disabled = true;
-                                verifyBtn.innerHTML = `<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...`;
-                                try {
-                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            sitekey: sitekey,
-                                            visual_ticket: visualTicket,
-                                            answer: currentAngle.toString()
-                                        })
-                                    });
-                                    const visData = await vRes.json();
-                                    if (visData.success && visData.token) {
-                                        injectToken(visData.token);
-                                        closeModal();
-                                    } else {
+                                verifyBtn.onclick = async () => {
+                                    verifyBtn.disabled = true;
+                                    verifyBtn.innerHTML = `<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...`;
+                                    try {
+                                        const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                sitekey: sitekey,
+                                                visual_ticket: visualTicket,
+                                                answer: currentAngle.toString()
+                                            })
+                                        });
+                                        const visData = await vRes.json();
+                                        if (visData.success && visData.token) {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            injectToken(visData.token);
+                                            closeModal();
+                                        } else {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            closeModal();
+                                            triggerError('Validation failed', false);
+                                        }
+                                    } catch (e) {
+                                        if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
                                         closeModal();
                                         triggerError('Validation failed', false);
                                     }
-                                } catch (e) {
-                                    closeModal();
-                                    triggerError('Validation failed', false);
-                                }
-                            };
+                                };
 
-                            rotWrapper.appendChild(verifyBtn);
-                            visualContainer.appendChild(rotWrapper);
-                            showModal();
+                                rotWrapper.appendChild(verifyBtn);
+                                visualContainer.appendChild(rotWrapper);
+                                showModal();
 
+                            } else {
+                                headerInfo.descEl.innerText = "Type the text from the image below.";
+                                const visualImg = document.createElement('img');
+                                visualImg.src = "data:image/png;base64," + vData.image;
+                                visualImg.style.cssText = `max-width: 100%; border-radius: 8px; margin-bottom: 12px; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
+                                const visualInput = document.createElement('input');
+                                visualInput.type = 'text';
+                                visualInput.placeholder = 'Enter the text above';
+                                visualInput.style.cssText = `width: 100% !important; padding: 12px !important; background: ${colors.boxBg} !important; color: ${colors.text} !important; border: 1px solid ${colors.boxBorder} !important; border-radius: 10px !important; font-size: 15px !important; margin-bottom: 14px !important; box-sizing: border-box !important; outline: none !important; font-family: inherit !important;`;
+                                visualInput.onfocus = () => { visualInput.style.borderColor = '#3b82f6'; };
+                                visualInput.onblur = () => { visualInput.style.borderColor = colors.boxBorder; };
+                                const visualBtn = document.createElement('button');
+                                visualBtn.innerText = 'Verify';
+                                visualBtn.type = 'button';
+                                visualBtn.style.cssText = `width: 100% !important; padding: 12px !important; margin: 0 !important; background: #3b82f6 !important; color: white !important; border: none !important; border-radius: 10px !important; cursor: pointer !important; font-size: 15px !important; font-weight: 600 !important; transition: background 0.2s !important; box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important; box-sizing: border-box !important; outline: none !important; display: block !important;`;
+                                visualBtn.onmouseover = () => { visualBtn.style.background = '#2563eb'; };
+                                visualBtn.onmouseout = () => { visualBtn.style.background = '#3b82f6'; };
+                                visualContainer.appendChild(visualImg);
+                                visualContainer.appendChild(visualInput);
+                                visualContainer.appendChild(visualBtn);
+                                showModal();
+                                visualInput.focus();
+
+                                const visualTicket = vData.visual_ticket;
+                                visualBtn.onclick = async () => {
+                                    visualBtn.innerText = 'Verifying...';
+                                    visualBtn.disabled = true;
+                                    try {
+                                        const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ sitekey: sitekey, visual_ticket: visualTicket, answer: visualInput.value })
+                                        });
+                                        const visData = await vRes.json();
+                                        if (visData.success && visData.token) {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            injectToken(visData.token);
+                                            closeModal();
+                                        } else {
+                                            if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                            closeModal();
+                                            triggerError('Validation failed', false);
+                                        }
+                                    } catch (e) {
+                                        if (activeAudioObj) { try { activeAudioObj.pause(); } catch(_) {} activeAudioObj = null; }
+                                        closeModal();
+                                        triggerError('Validation failed', false);
+                                    }
+                                };
+                            }
+                        };
+
+                        if (data.visual_type === 'audio') {
+                            renderAudioUI(data, false);
                         } else {
-                            headerInfo.descEl.innerText = "Type the text from the image below.";
-                            // Text challenge fallback
-                            const visualImg = document.createElement('img');
-                            visualImg.src = "data:image/png;base64," + data.image;
-                            visualImg.style.cssText = `max-width: 100%; border-radius: 8px; margin-bottom: 12px; border: 1px solid ${colors.boxBorder}; box-sizing: border-box;`;
-                            const visualInput = document.createElement('input');
-                            visualInput.type = 'text';
-                            visualInput.placeholder = 'Enter the text above';
-                            visualInput.style.cssText = `width: 100% !important; padding: 12px !important; background: ${colors.boxBg} !important; color: ${colors.text} !important; border: 1px solid ${colors.boxBorder} !important; border-radius: 10px !important; font-size: 15px !important; margin-bottom: 14px !important; box-sizing: border-box !important; outline: none !important; font-family: inherit !important;`;
-                            visualInput.onfocus = () => { visualInput.style.borderColor = '#3b82f6'; };
-                            visualInput.onblur = () => { visualInput.style.borderColor = colors.boxBorder; };
-                            const visualBtn = document.createElement('button');
-                            visualBtn.innerText = 'Verify';
-                            visualBtn.type = 'button';
-                            visualBtn.style.cssText = `width: 100% !important; padding: 12px !important; margin: 0 !important; background: #3b82f6 !important; color: white !important; border: none !important; border-radius: 10px !important; cursor: pointer !important; font-size: 15px !important; font-weight: 600 !important; transition: background 0.2s !important; box-shadow: 0 3px 8px rgba(59, 130, 246, 0.3) !important; box-sizing: border-box !important; outline: none !important; display: block !important;`;
-                            visualBtn.onmouseover = () => { visualBtn.style.background = '#2563eb'; };
-                            visualBtn.onmouseout = () => { visualBtn.style.background = '#3b82f6'; };
-                            visualContainer.appendChild(visualImg);
-                            visualContainer.appendChild(visualInput);
-                            visualContainer.appendChild(visualBtn);
-                            showModal();
-                            visualInput.focus();
-
-                            const visualTicket = data.visual_ticket;
-                            visualBtn.onclick = async () => {
-                                visualBtn.innerText = 'Verifying...';
-                                visualBtn.disabled = true;
-                                try {
-                                    const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ sitekey: sitekey, visual_ticket: visualTicket, answer: visualInput.value })
-                                    });
-                                    const visData = await vRes.json();
-                                    if (visData.success && visData.token) {
-                                        injectToken(visData.token);
-                                        closeModal();
-                                    } else {
-                                        closeModal();
-                                        triggerError('Validation failed', false);
-                                    }
-                                } catch (e) {
-                                    closeModal();
-                                    triggerError('Validation failed', false);
-                                }
-                            };
+                            renderVisualChallenge(data);
                         }
                     }
                     else {
