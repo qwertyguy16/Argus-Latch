@@ -190,7 +190,7 @@
     // =========================================================================
     const ArgusVM = (function () {
         // Polymorphic Opcode Seed (randomized per build)
-        const _VM_SEED = 0x18;
+        const _VM_SEED = 0x9E;
 
         // Base opcode mnemonics
         const _OP_BASE = [

@@ -25,8 +25,13 @@ class CFConnectingIPMiddleware:
     def __call__(self, environ, start_response):
         cf_ip = environ.get("HTTP_CF_CONNECTING_IP")
         if cf_ip and cf_ip.strip():
-            # Cloudflare sends CF-Connecting-IP as the true client IP
-            environ["REMOTE_ADDR"] = cf_ip.strip().split(",")[0].strip()
+            candidate = cf_ip.strip().split(",")[0].strip()
+            try:
+                import ipaddress
+                ipaddress.ip_address(candidate)
+                environ["REMOTE_ADDR"] = candidate
+            except ValueError:
+                pass
         return self.wsgi_app(environ, start_response)
 
 PORT = int(os.getenv("PORT", 4757))
@@ -101,14 +106,30 @@ limiter.init_app(app)
 
 app.register_blueprint(captcha_bp, url_prefix='/v1/captcha')
 
+def is_admin_or_local():
+    client_ip = get_client_ip()
+    is_local = client_ip in ['127.0.0.1', '::1', 'localhost']
+    admin_token = os.getenv('ADMIN_KEY') or os.getenv('DB_ADMIN_TOKEN')
+    provided_token = request.headers.get('X-Admin-Key') or request.args.get('admin_key')
+    if admin_token and provided_token == admin_token:
+        return True
+    return is_local
+
 @app.route('/v1/db/status', methods=['GET'])
 def db_status():
     """Return current database connection status, active node, and failover diagnostics."""
-    return jsonify(failover_manager.get_status()), 200
+    status = failover_manager.get_status()
+    if not is_admin_or_local():
+        # Mask internal network topology and hostnames for unauthenticated external requests
+        status["primary_uri"] = "configured" if status.get("primary_uri") != "None" else "not configured"
+        status["fallback_uri"] = "configured" if status.get("fallback_uri") != "None" else "not configured"
+    return jsonify(status), 200
 
 @app.route('/v1/db/recover', methods=['POST'])
 def db_recover():
     """Explicit health-recovery check to restore connection to primary if healthy."""
+    if not is_admin_or_local():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
     result = failover_manager.check_and_recover_primary()
     code = 200 if result.get("success") else 503
     return jsonify(result), code

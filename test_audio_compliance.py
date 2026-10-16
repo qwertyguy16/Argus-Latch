@@ -6,12 +6,48 @@ import sys
 
 BASE_URL = "http://127.0.0.1:4757"
 
+class ResponseWrapper:
+    def __init__(self, res):
+        self._res = res
+        self.status_code = res.status_code
+        self.text = res.get_data(as_text=True)
+    def json(self):
+        return self._res.get_json()
+
+class FlaskClientAdapter:
+    def __init__(self, client):
+        self.client = client
+    def get(self, url, **kwargs):
+        path = url.replace(BASE_URL, '')
+        r = self.client.get(path, **kwargs)
+        return ResponseWrapper(r)
+    def post(self, url, **kwargs):
+        path = url.replace(BASE_URL, '')
+        if 'json' in kwargs:
+            r = self.client.post(path, json=kwargs['json'])
+        elif 'data' in kwargs:
+            r = self.client.post(path, data=kwargs['data'])
+        else:
+            r = self.client.post(path, **kwargs)
+        return ResponseWrapper(r)
+
+def get_http_client():
+    try:
+        r = requests.get(f"{BASE_URL}/v1/captcha/api.js", timeout=0.5)
+        if r.status_code == 200:
+            return requests
+    except Exception:
+        pass
+    from app import app
+    return FlaskClientAdapter(app.test_client())
+
 def test_audio_compliance():
+    http = get_http_client()
     print("Testing Audio Compliance across all challenge types...")
 
     # 1. Test /v1/captcha/api.js serving
     print("\n[1] Testing /v1/captcha/api.js...")
-    res = requests.get(f"{BASE_URL}/v1/captcha/api.js")
+    res = http.get(f"{BASE_URL}/v1/captcha/api.js")
     assert res.status_code == 200, f"Failed api.js: {res.status_code}"
     assert len(res.text) > 1000, "api.js content is too short"
     print("  -> api.js fetched successfully (length:", len(res.text), ")")
@@ -22,7 +58,7 @@ def test_audio_compliance():
         "sitekey": "argus_6x000000000000000000000000",
         "telemetry": {}
     }
-    res = requests.post(f"{BASE_URL}/v1/captcha/challenge", json=payload)
+    res = http.post(f"{BASE_URL}/v1/captcha/challenge", json=payload)
     assert res.status_code == 200, f"Challenge failed: {res.status_code} {res.text}"
     data = res.json()
     assert data.get("requires_visual") is True, f"requires_visual not True: {data}"
@@ -55,7 +91,7 @@ def test_audio_compliance():
 
     # 3. Test verification with incorrect digits
     print("\n[3] Testing incorrect audio verification rejection...")
-    bad_res = requests.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
+    bad_res = http.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
         "sitekey": "argus_6x000000000000000000000000",
         "visual_ticket": ticket,
         "answer": "99999" if expected_digits != "99999" else "11111"
@@ -64,14 +100,14 @@ def test_audio_compliance():
     print("  -> Incorrect answer properly rejected.")
 
     # 4. Generate a fresh ticket to solve
-    res = requests.post(f"{BASE_URL}/v1/captcha/challenge", json=payload)
+    res = http.post(f"{BASE_URL}/v1/captcha/challenge", json=payload)
     data = res.json()
     ticket = data["visual_ticket"]
     expected_digits = ticket.rsplit('.', 1)[0].split(':')[2]
 
     # 5. Test successful verification with correct digits
     print("\n[4] Testing correct audio verification...")
-    v_res = requests.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
+    v_res = http.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
         "sitekey": "argus_6x000000000000000000000000",
         "visual_ticket": ticket,
         "answer": expected_digits
@@ -85,7 +121,7 @@ def test_audio_compliance():
 
     # 6. Test replay protection on the consumed ticket
     print("\n[5] Testing replay protection on used ticket...")
-    replay_res = requests.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
+    replay_res = http.post(f"{BASE_URL}/v1/captcha/visual-verify", json={
         "sitekey": "argus_6x000000000000000000000000",
         "visual_ticket": ticket,
         "answer": expected_digits
@@ -95,7 +131,7 @@ def test_audio_compliance():
 
     # 7. Test siteverify with the audio-generated token
     print("\n[6] Testing siteverify backend token verification...")
-    sv_res = requests.post(f"{BASE_URL}/v1/captcha/siteverify", data={
+    sv_res = http.post(f"{BASE_URL}/v1/captcha/siteverify", data={
         "secret": "sk_6x000000000000000000000000",
         "response": token
     })
@@ -107,7 +143,7 @@ def test_audio_compliance():
     # 8. Test on-demand /audio-challenge endpoint from Slider (argus_4x) & Rotation (argus_5x)
     print("\n[7] Testing On-Demand Accessibility switch for Slider and Rotation...")
     for sk, desc in [("argus_4x000000000000000000000000", "Slider"), ("argus_5x000000000000000000000000", "Rotation")]:
-        aud_res = requests.post(f"{BASE_URL}/v1/captcha/audio-challenge", json={"sitekey": sk})
+        aud_res = http.post(f"{BASE_URL}/v1/captcha/audio-challenge", json={"sitekey": sk})
         assert aud_res.status_code == 200, f"Failed on-demand audio for {desc}: {aud_res.status_code} {aud_res.text}"
         aud_data = aud_res.json()
         assert aud_data.get("visual_type") == "audio"

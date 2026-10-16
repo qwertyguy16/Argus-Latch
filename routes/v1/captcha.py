@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, render_template, make_response, url_for, current_app, send_from_directory
-from models import CaptchaApplication
+from models import CaptchaApplication, ConsumedCaptchaToken, CaptchaLog
 from extensions import db, limiter, get_client_ip
 import secrets
 import time
@@ -7,8 +7,98 @@ import math
 import hmac
 import hashlib
 import json
+import base64
+import ipaddress
+import threading
 from datetime import datetime, timedelta
 from functools import lru_cache
+
+# =========================================================================
+# Cryptographic Ticket Authenticated Encryption (v3) & Anti-Replay
+# =========================================================================
+def encrypt_ticket(app_secret, c_type, challenge_string, expected_ans, timestamp):
+    """Encrypt challenge answer inside ticket with HMAC-SHA256 authenticated keystream."""
+    key_enc = hmac.new(app_secret.encode('utf-8'), b"argus_ticket_v3_encryption_key", hashlib.sha256).digest()
+    key_mac = hmac.new(app_secret.encode('utf-8'), b"argus_ticket_v3_mac_key", hashlib.sha256).digest()
+    iv = secrets.token_bytes(16)
+    plaintext = f"{c_type}:{challenge_string}:{expected_ans}:{timestamp}".encode('utf-8')
+    num_blocks = math.ceil(len(plaintext) / 32)
+    keystream = b"".join(
+        hmac.new(key_enc, iv + i.to_bytes(4, 'big'), hashlib.sha256).digest() for i in range(num_blocks)
+    )[:len(plaintext)]
+    ciphertext = bytes(a ^ b for a, b in zip(plaintext, keystream))
+    tag = hmac.new(key_mac, iv + ciphertext, hashlib.sha256).digest()
+    return "v3." + base64.urlsafe_b64encode(iv + tag + ciphertext).decode('utf-8')
+
+def decrypt_ticket(app_secret, ticket_str):
+    """Decrypt v3 authenticated ticket and extract challenge parameters."""
+    if not ticket_str or not ticket_str.startswith("v3."):
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(ticket_str[3:].encode('utf-8'))
+        if len(raw) < 48:
+            return None
+        iv = raw[:16]
+        tag = raw[16:48]
+        ciphertext = raw[48:]
+        key_mac = hmac.new(app_secret.encode('utf-8'), b"argus_ticket_v3_mac_key", hashlib.sha256).digest()
+        expected_tag = hmac.new(key_mac, iv + ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expected_tag):
+            return None
+        key_enc = hmac.new(app_secret.encode('utf-8'), b"argus_ticket_v3_encryption_key", hashlib.sha256).digest()
+        num_blocks = math.ceil(len(ciphertext) / 32)
+        keystream = b"".join(
+            hmac.new(key_enc, iv + i.to_bytes(4, 'big'), hashlib.sha256).digest() for i in range(num_blocks)
+        )[:len(ciphertext)]
+        plaintext = bytes(a ^ b for a, b in zip(ciphertext, keystream)).decode('utf-8')
+        return plaintext.split(':')
+    except Exception:
+        return None
+
+# PoW single-use tracking (prevents reusing solved nonces)
+consumed_pows = {} # hash_hex -> expiry_timestamp
+pow_lock = threading.Lock()
+
+def is_pow_replayed(hash_hex):
+    if not hash_hex:
+        return False
+    now = time.time()
+    with pow_lock:
+        if len(consumed_pows) > 1000:
+            expired_keys = [k for k, exp in consumed_pows.items() if exp < now]
+            for k in expired_keys:
+                del consumed_pows[k]
+        if hash_hex in consumed_pows:
+            if consumed_pows[hash_hex] > now:
+                return True
+            else:
+                del consumed_pows[hash_hex]
+    return False
+
+def record_consumed_pow(hash_hex, ttl=360):
+    if not hash_hex:
+        return
+    now = time.time()
+    with pow_lock:
+        consumed_pows[hash_hex] = now + ttl
+
+# Periodic token & ticket cleanup
+_last_token_purge = 0
+def purge_expired_tokens_if_needed():
+    global _last_token_purge
+    now = time.time()
+    if now - _last_token_purge > 600:
+        _last_token_purge = now
+        try:
+            from models import ConsumedCaptchaToken
+            from extensions import db
+            ConsumedCaptchaToken.query.filter(ConsumedCaptchaToken.expires_at < datetime.utcnow()).delete()
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
 captcha_bp = Blueprint('captcha', __name__, url_prefix='/captcha')
 
@@ -97,6 +187,12 @@ def is_domain_authorized(app_domains, request):
     elif referer:
         try:
             request_domain = (urlparse(referer).hostname or "").lower()
+        except Exception:
+            pass
+
+    if not request_domain and request.host:
+        try:
+            request_domain = (request.host.split(':')[0] or "").lower()
         except Exception:
             pass
 
@@ -634,21 +730,48 @@ def add_cors_headers(response):
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     return response
 
-@lru_cache(maxsize=1000)
+_vpn_cache = {} # ip -> (is_vpn, timestamp)
+_vpn_circuit_breaker_until = 0
+
 def check_ip_vpn(client_ip):
-    if not client_ip or client_ip == '127.0.0.1':
+    global _vpn_circuit_breaker_until
+    if not client_ip:
         return False
+    
+    # Fast check for private, loopback, or multicast IPs with 0 network overhead
+    try:
+        ip_obj = ipaddress.ip_address(client_ip.strip())
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_multicast:
+            return False
+    except ValueError:
+        return False
+
+    now = time.time()
+    if client_ip in _vpn_cache:
+        val, ts = _vpn_cache[client_ip]
+        if now - ts < 3600:
+            return val
+
+    if now < _vpn_circuit_breaker_until:
+        return False
+
     try:
         import urllib.request
         import json
-        req = urllib.request.Request(f"http://ip-api.com/json/{client_ip}?fields=proxy,hosting", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=2) as response:
+        req = urllib.request.Request(
+            f"https://ip-api.com/json/{client_ip}?fields=proxy,hosting",
+            headers={'User-Agent': 'Argus-Latch/1.0'}
+        )
+        with urllib.request.urlopen(req, timeout=0.8) as response:
             ip_data = json.loads(response.read().decode())
-            if ip_data.get('proxy') or ip_data.get('hosting'):
-                return True
+            is_vpn = bool(ip_data.get('proxy') or ip_data.get('hosting'))
+            _vpn_cache[client_ip] = (is_vpn, now)
+            if len(_vpn_cache) > 5000:
+                _vpn_cache.clear()
+            return is_vpn
     except Exception:
-        pass
-    return False
+        _vpn_circuit_breaker_until = now + 30
+        return False
 
 def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
     from models import CaptchaLog
@@ -727,6 +850,7 @@ def challenge():
     import base64
     import json
     telemetry = {}
+    is_telemetry_encrypted = False
     if telemetry_raw and isinstance(telemetry_raw, str):
         telemetry_raw_str = telemetry_raw.strip()
         if telemetry_raw_str.startswith('v2:'):
@@ -753,6 +877,7 @@ def challenge():
                     r_prev = cbyte
                     dec.append(chr(pcode))
                 telemetry = json.loads("".join(dec))
+                is_telemetry_encrypted = True
             except Exception:
                 telemetry = {}
         else:
@@ -764,6 +889,7 @@ def challenge():
                     key_char = site_key[i % len(site_key)]
                     result += chr(ord(char) ^ ord(key_char))
                 telemetry = json.loads(result)
+                is_telemetry_encrypted = True
             except Exception:
                 telemetry = {}
     elif isinstance(telemetry_raw, dict):
@@ -778,6 +904,16 @@ def challenge():
 
     if not is_domain_authorized(app.domains, request):
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
+
+    # If app has configured allowed domains, verify presence of Origin/Referer on POST
+    domain_header_missing = False
+    if getattr(app, 'domains', None) and app.domains.strip():
+        origin = request.headers.get('Origin')
+        referer = request.headers.get('Referer')
+        if not origin and not referer:
+            if getattr(app, 'strict_mode', False) or getattr(app, 'under_attack_mode', False):
+                return jsonify({"success": False, "error": "Domain authorization failed: Origin header required in strict mode."}), 403
+            domain_header_missing = True
 
     # Increment challenges
     if not getattr(app, 'is_test', False):
@@ -795,6 +931,14 @@ def challenge():
     vpn_detected = check_ip_vpn(client_ip)
 
     risk_score = 0.0
+
+    # Suspicion penalty if browser origin headers are missing on domain-protected apps
+    if domain_header_missing:
+        risk_score += 0.40
+
+    # For live production applications (non-test), unencrypted telemetry increases risk
+    if not getattr(app, 'is_test', False) and not is_telemetry_encrypted:
+        risk_score += 0.45
 
     # VPN & Datacenter IP Detection
     if vpn_detected:
@@ -924,6 +1068,9 @@ def challenge():
         
         if nonce is None or not timestamp_pow or not hash_hex:
             risk_score += 1.0
+        elif not getattr(app, 'is_test', False) and is_pow_replayed(hash_hex):
+            # PoW replay attack detected
+            risk_score += 1.0
         else:
             now_ms = time.time() * 1000
             if (now_ms - timestamp_pow > 300000) or (timestamp_pow - now_ms > 60000): # 5 minutes old or 1 min in future
@@ -944,6 +1091,10 @@ def challenge():
                 # Check against expected difficulty (downgrade penalty)
                 if submitted_difficulty < expected_difficulty:
                     risk_score += 0.6
+
+                # Mark PoW as consumed (production only)
+                if expected_hash == hash_hex and hash_hex.startswith(expected_prefix) and not getattr(app, 'is_test', False):
+                    record_consumed_pow(hash_hex)
 
     # Check if Visual Challenge is required
     requires_visual = False
@@ -1016,9 +1167,12 @@ def challenge():
 
         if challenge_type == 'audio':
             digits_str, audio_b64 = generate_audio_challenge()
-            payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
-            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-            visual_ticket = f"{payload}.{vis_sig}"
+            if getattr(app, 'is_test', False):
+                payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
+                vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+                visual_ticket = f"{payload}.{vis_sig}"
+            else:
+                visual_ticket = encrypt_ticket(app.secret_key, 'aud', challenge_string, digits_str, timestamp)
             upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
@@ -1032,9 +1186,12 @@ def challenge():
             })
         elif challenge_type == 'rotation':
             img_b64, target_angle = generate_rotation_challenge()
-            payload = f"rot:{challenge_string}:{target_angle}:{timestamp}"
-            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-            visual_ticket = f"{payload}.{vis_sig}"
+            if getattr(app, 'is_test', False):
+                payload = f"rot:{challenge_string}:{target_angle}:{timestamp}"
+                vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+                visual_ticket = f"{payload}.{vis_sig}"
+            else:
+                visual_ticket = encrypt_ticket(app.secret_key, 'rot', challenge_string, target_angle, timestamp)
             upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
@@ -1047,9 +1204,12 @@ def challenge():
             })
         else:
             bg_b64, piece_b64, target_x, target_y = generate_slider_challenge()
-            payload = f"sli:{challenge_string}:{target_x}:{timestamp}"
-            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-            visual_ticket = f"{payload}.{vis_sig}"
+            if getattr(app, 'is_test', False):
+                payload = f"sli:{challenge_string}:{target_x}:{timestamp}"
+                vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+                visual_ticket = f"{payload}.{vis_sig}"
+            else:
+                visual_ticket = encrypt_ticket(app.secret_key, 'sli', challenge_string, target_x, timestamp)
             upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
@@ -1085,6 +1245,7 @@ def challenge():
 @limiter.limit("120 per minute")
 def siteverify():
     """Endpoint called by the third-party backend to validate the token."""
+    purge_expired_tokens_if_needed()
     secret = request.form.get('secret') or (request.json.get('secret') if request.is_json else None)
     token = request.form.get('response') or (request.json.get('response') if request.is_json else None)
     
@@ -1204,9 +1365,12 @@ def audio_challenge():
         digits_str, audio_b64 = generate_audio_challenge()
         timestamp = str(int(time.time()))
         challenge_string = secrets.token_hex(8)
-        payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
-        vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
-        visual_ticket = f"{payload}.{vis_sig}"
+        if getattr(app, 'is_test', False):
+            payload = f"aud:{challenge_string}:{digits_str}:{timestamp}"
+            vis_sig = hmac.new(app.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+            visual_ticket = f"{payload}.{vis_sig}"
+        else:
+            visual_ticket = encrypt_ticket(app.secret_key, 'aud', challenge_string, digits_str, timestamp)
 
         client_ip = get_client_ip()
         try:
@@ -1236,6 +1400,7 @@ def visual_verify():
     if request.method == 'OPTIONS':
         return '', 204
         
+    purge_expired_tokens_if_needed()
     data = request.get_json()
     site_key = data.get('sitekey')
     visual_ticket = data.get('visual_ticket')
@@ -1252,40 +1417,52 @@ def visual_verify():
         return jsonify({"success": False, "error": "Missing parameters"}), 400
         
     try:
-        payload_body, vis_sig = visual_ticket.rsplit('.', 1)
-        expected_sig = hmac.new(app.secret_key.encode('utf-8'), payload_body.encode('utf-8'), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(vis_sig, expected_sig):
-            raise ValueError("Invalid signature")
-            
         from models import ConsumedCaptchaToken
         from datetime import datetime, timedelta
-        
-        if ConsumedCaptchaToken.query.filter_by(signature=vis_sig).first():
-            raise ValueError("Ticket already used")
-            
-        parts = payload_body.split(':')
-        
-        if len(parts) >= 4 and parts[0] in ['rot', 'sli', 'aud']:
+
+        if visual_ticket.startswith('v3.'):
+            parts = decrypt_ticket(app.secret_key, visual_ticket)
+            if not parts:
+                raise ValueError("Invalid ticket payload")
+            vis_sig = visual_ticket
             c_type = parts[0]
             challenge_string = parts[1]
             expected_ans = parts[2]
             timestamp = int(parts[3])
-        elif len(parts) == 3:
-            c_type = 'sli'
-            challenge_string = parts[0]
-            expected_ans = parts[1]
-            timestamp = int(parts[2])
         else:
-            c_type = 'sli'
-            challenge_string = parts[0]
-            expected_ans = parts[1]
-            timestamp = int(time.time())
+            payload_body, vis_sig = visual_ticket.rsplit('.', 1)
+            expected_sig = hmac.new(app.secret_key.encode('utf-8'), payload_body.encode('utf-8'), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(vis_sig, expected_sig):
+                raise ValueError("Invalid signature")
             
+            parts = payload_body.split(':')
+            if len(parts) >= 4 and parts[0] in ['rot', 'sli', 'aud']:
+                c_type = parts[0]
+                challenge_string = parts[1]
+                expected_ans = parts[2]
+                timestamp = int(parts[3])
+            elif len(parts) == 3:
+                c_type = 'sli'
+                challenge_string = parts[0]
+                expected_ans = parts[1]
+                timestamp = int(parts[2])
+            else:
+                c_type = 'sli'
+                challenge_string = parts[0]
+                expected_ans = parts[1]
+                timestamp = int(time.time())
+
         if time.time() - timestamp > 300:
             raise ValueError("Ticket expired")
-            
+
+        ticket_id = hashlib.sha256(vis_sig.encode('utf-8')).hexdigest()
+        if ConsumedCaptchaToken.query.filter(
+            (ConsumedCaptchaToken.signature == vis_sig) | (ConsumedCaptchaToken.signature == ticket_id)
+        ).first():
+            raise ValueError("Ticket already used")
+
         expires = datetime.utcfromtimestamp(timestamp) + timedelta(seconds=300)
-        db.session.add(ConsumedCaptchaToken(signature=vis_sig, expires_at=expires))
+        db.session.add(ConsumedCaptchaToken(signature=ticket_id, expires_at=expires))
             
     except Exception as ex:
         app.total_failures = (app.total_failures or 0) + 1
