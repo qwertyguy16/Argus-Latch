@@ -104,8 +104,7 @@
         
         <form id="verify-form" style="display: none;">
             <div id="captcha-container">
-                <!-- Argus Captcha will be rendered here -->
-                <div class="argus-captcha" id="argus-latch-element"></div>
+                <div class="argus-captcha" id="captcha-box"></div>
             </div>
             <button type="submit" id="verify-btn" style="background-color: #2196F3;">Verify Token</button>
         </form>
@@ -146,10 +145,13 @@
                 return;
             }
 
-            const captchaElement = document.getElementById('argus-latch-element');
+            const captchaElement = document.getElementById('captcha-box');
             
             // Clear previous initialization state
             captchaElement.innerHTML = '';
+            if (captchaElement.shadowRoot) {
+                captchaElement.shadowRoot.innerHTML = '';
+            }
             delete captchaElement.dataset.initialized;
             delete captchaElement.dataset.verified;
             
@@ -160,12 +162,7 @@
             document.getElementById('verify-form').style.display = 'block';
 
             // Load or reload the script
-            const oldScript = document.getElementById('argus-script');
-            if (oldScript) {
-                oldScript.remove();
-            }
             const script = document.createElement('script');
-            script.id = 'argus-script';
             const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             script.src = (isLocal ? '/static/captcha_api.min.js' : 'https://cdn.argusgroup.co.uk/api/v1/official-content/captcha_api.min.js') + '?t=' + Date.now();
             document.body.appendChild(script);

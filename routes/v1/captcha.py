@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, render_template, make_response, url_for
+from flask import Blueprint, request, jsonify, render_template, make_response, url_for, current_app, send_from_directory
 from models import CaptchaApplication
 from extensions import db, limiter, get_client_ip
 import secrets
@@ -108,6 +108,8 @@ def is_domain_authorized(app_domains, request):
         or f"www.{request_domain}" in allowed_domains
         or request_domain.replace('www.', '') in allowed_domains
     )
+
+def generate_text_challenge():
     import io
     import base64
     import random
@@ -480,7 +482,11 @@ import subprocess
 import hashlib
 from flask import current_app
 
-# /api.js has been completely removed in favor of official CDN delivery
+# /api.js serving (serves local built obfuscated bundle or redirects to official CDN)
+@captcha_bp.route('/api.js', methods=['GET'])
+def get_api_script():
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'static')
+    return send_from_directory(static_dir, 'captcha_api.min.js', mimetype='application/javascript')
 
 settings_cache = {}
 
@@ -666,20 +672,44 @@ def challenge():
     import json
     telemetry = {}
     if telemetry_raw and isinstance(telemetry_raw, str):
-        try:
-            # Decrypt/Deobfuscate payload
-            payload_str = base64.b64decode(telemetry_raw).decode('utf-8')
-            result = ""
-            for i, char in enumerate(payload_str):
-                key_char = site_key[i % len(site_key)]
-                result += chr(ord(char) ^ ord(key_char))
-            telemetry = json.loads(result)
-        except Exception:
+        telemetry_raw_str = telemetry_raw.strip()
+        if telemetry_raw_str.startswith('v2:'):
+            # v2: Salted Dynamic S-Box CBC Stream Decryption
             try:
-                # Fallback for raw base64 (old clients or testing)
-                telemetry = json.loads(base64.b64decode(telemetry_raw).decode('utf-8'))
+                parts = telemetry_raw_str.split(':', 2)
+                r_iv = parts[1]
+                raw_bytes = base64.b64decode(parts[2])
+                r_seed = site_key + r_iv
+                r_sbox = list(range(256))
+                rj = 0
+                for i in range(256):
+                    rj = (rj + r_sbox[i] + ord(r_seed[i % len(r_seed)])) & 0xFF
+                    r_sbox[i], r_sbox[rj] = r_sbox[rj], r_sbox[i]
+                dec = []
+                ri1 = rj1 = 0
+                r_prev = 0xAA
+                for cbyte in raw_bytes:
+                    ri1 = (ri1 + 1) & 0xFF
+                    rj1 = (rj1 + r_sbox[ri1]) & 0xFF
+                    r_sbox[ri1], r_sbox[rj1] = r_sbox[rj1], r_sbox[ri1]
+                    kbyte = r_sbox[(r_sbox[ri1] + r_sbox[rj1]) & 0xFF]
+                    pcode = cbyte ^ kbyte ^ r_prev
+                    r_prev = cbyte
+                    dec.append(chr(pcode))
+                telemetry = json.loads("".join(dec))
             except Exception:
-                pass
+                telemetry = {}
+        else:
+            # v1 Legacy XOR cipher
+            try:
+                payload_str = base64.b64decode(telemetry_raw_str).decode('utf-8')
+                result = ""
+                for i, char in enumerate(payload_str):
+                    key_char = site_key[i % len(site_key)]
+                    result += chr(ord(char) ^ ord(key_char))
+                telemetry = json.loads(result)
+            except Exception:
+                telemetry = {}
     elif isinstance(telemetry_raw, dict):
         telemetry = telemetry_raw
     
@@ -743,8 +773,21 @@ def challenge():
     if telemetry.get('screenAnomalies'):
         risk_score += 0.4
         
-    if telemetry.get('honeypot'):
-        risk_score += 1.0
+    honeypot_triggered = bool(
+        telemetry.get('honeypot')
+        or telemetry.get('honeypotTriggered')
+        or telemetry.get('honeypotAction')
+        or telemetry.get('honeypot_clicked')
+    )
+    tamper_detected = bool(
+        telemetry.get('tamperingDetected')
+        or telemetry.get('hookingDetected')
+        or telemetry.get('debuggerDetected')
+        or telemetry.get('tamperedAPIs')
+        or telemetry.get('vmIntegrityFailed')
+    )
+    if honeypot_triggered or tamper_detected:
+        risk_score = 1.0
         
     if telemetry.get('forceVisual'):
         risk_score += 0.4
@@ -868,17 +911,25 @@ def challenge():
             return jsonify({"success": False, "error": "Service temporarily unavailable"}), 503
         # 'auto' continues normally
         
-    risk_score = min(1.0, risk_score)
-    if risk_score >= 0.85 or telemetry.get('honeypot'):
+    if honeypot_triggered or tamper_detected:
+        risk_score = 1.0
+    else:
+        risk_score = min(1.0, risk_score)
+
+    if risk_score >= 0.85 or honeypot_triggered or tamper_detected:
         from datetime import datetime
         stealth_str = f" | Stealth: {','.join(telemetry.get('stealthReasons', []))}" if telemetry.get('stealthReasons') else ""
         pow_str = f" | PoW: diff={pow_data.get('difficulty', 4)}" if pow_data else " | PoW: None"
-        stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB{stealth_str}"
+        honey_str = f" | Honeypot: Triggered ({telemetry.get('honeypotAction', 'yes')})" if honeypot_triggered else ""
+        tamper_apis = telemetry.get('tamperedAPIs', [])
+        tamper_str = f" | Tamper: {','.join(tamper_apis) if tamper_apis else 'Hooking/Debugger'}" if tamper_detected else ""
+        stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str}{honey_str}{tamper_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB{stealth_str}"
         if current_app.debug:
             print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
-        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
+        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, vpn_detected, telemetry)
             
-        return jsonify({"success": False, "error": "Security validation failed. High risk detected."}), 403
+        error_msg = "Security validation failed. Environment tampering detected." if tamper_detected else "Security validation failed. High risk detected."
+        return jsonify({"success": False, "error": error_msg}), 403
 
     if getattr(app, 'under_attack_mode', False) or app.strict_mode or risk_score >= 0.35:
         requires_visual = True

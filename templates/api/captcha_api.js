@@ -13,6 +13,541 @@
         }
     }
 
+    // =========================================================================
+    // ARGUS SHIELD: Multi-Layer Anti-Tamper, Anti-Hooking & Prototype Integrity
+    // =========================================================================
+    const ArgusShield = (function () {
+        const _Function_toString = Function.prototype.toString;
+        const _Object_getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+        const _Object_hasOwnProperty = Object.prototype.hasOwnProperty;
+        const _Object_defineProperty = Object.defineProperty;
+        const _Object_freeze = Object.freeze;
+        const _Date_now = Date.now;
+        const _fetch = window.fetch;
+        const _createElement = Document.prototype.createElement;
+        const _addEventListener = EventTarget.prototype.addEventListener;
+
+        const NATIVE_CODE_REGEX = /^function\s*([a-zA-Z0-9_$]+)?\s*\([^)]*\)\s*\{\s*\[native code\]\s*\}$/;
+
+        function isNativeFunction(fn) {
+            if (!fn || typeof fn !== 'function') return false;
+            try {
+                if (_Object_hasOwnProperty.call(fn, 'toString')) {
+                    return false;
+                }
+                const fnStr = _Function_toString.call(fn);
+                if (!NATIVE_CODE_REGEX.test(fnStr)) {
+                    return false;
+                }
+                const desc = _Object_getOwnPropertyDescriptor(fn, 'prototype');
+                if (desc && desc.get) {
+                    return false;
+                }
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function isToStringTampered() {
+            try {
+                if (Function.prototype.toString !== _Function_toString) {
+                    return true;
+                }
+                if (_Object_hasOwnProperty.call(Function.prototype, 'toString')) {
+                    const desc = _Object_getOwnPropertyDescriptor(Function.prototype, 'toString');
+                    if (desc && (!desc.writable || !desc.configurable)) {
+                        return true;
+                    }
+                }
+                const selfStr = _Function_toString.call(_Function_toString);
+                if (!NATIVE_CODE_REGEX.test(selfStr)) {
+                    return true;
+                }
+                if (_Function_toString.name !== 'toString') {
+                    return true;
+                }
+                return false;
+            } catch (_) {
+                return true;
+            }
+        }
+
+        function auditEnvironment() {
+            const tamperedAPIs = [];
+            let hookingDetected = false;
+            let debuggerDetected = false;
+
+            if (isToStringTampered()) {
+                hookingDetected = true;
+                tamperedAPIs.push('Function.prototype.toString');
+            }
+
+            if (window.fetch && (!isNativeFunction(window.fetch) || window.fetch !== _fetch)) {
+                hookingDetected = true;
+                tamperedAPIs.push('window.fetch');
+            }
+
+            if (Object.defineProperty && (!isNativeFunction(Object.defineProperty) || Object.defineProperty !== _Object_defineProperty)) {
+                hookingDetected = true;
+                tamperedAPIs.push('Object.defineProperty');
+            }
+
+            if (Object.getOwnPropertyDescriptor && (!isNativeFunction(Object.getOwnPropertyDescriptor) || Object.getOwnPropertyDescriptor !== _Object_getOwnPropertyDescriptor)) {
+                hookingDetected = true;
+                tamperedAPIs.push('Object.getOwnPropertyDescriptor');
+            }
+
+            if (Document.prototype.createElement && (!isNativeFunction(Document.prototype.createElement) || Document.prototype.createElement !== _createElement)) {
+                hookingDetected = true;
+                tamperedAPIs.push('Document.prototype.createElement');
+            }
+
+            if (EventTarget.prototype.addEventListener && (!isNativeFunction(EventTarget.prototype.addEventListener) || EventTarget.prototype.addEventListener !== _addEventListener)) {
+                hookingDetected = true;
+                tamperedAPIs.push('EventTarget.prototype.addEventListener');
+            }
+
+            try {
+                const nav = window.navigator;
+                if (nav) {
+                    const desc = _Object_getOwnPropertyDescriptor(nav, 'webdriver') ||
+                                 _Object_getOwnPropertyDescriptor(Object.getPrototypeOf(nav), 'webdriver');
+                    if (desc && desc.get) {
+                        const getterStr = _Function_toString.call(desc.get);
+                        if (!NATIVE_CODE_REGEX.test(getterStr)) {
+                            hookingDetected = true;
+                            tamperedAPIs.push('navigator.webdriver_getter_hook');
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            try {
+                if (window.crypto && window.crypto.subtle && window.crypto.subtle.digest) {
+                    if (!isNativeFunction(window.crypto.subtle.digest)) {
+                        hookingDetected = true;
+                        tamperedAPIs.push('crypto.subtle.digest');
+                    }
+                }
+            } catch (_) {}
+
+            try {
+                if (window.HTMLCanvasElement && window.HTMLCanvasElement.prototype.toDataURL) {
+                    if (!isNativeFunction(window.HTMLCanvasElement.prototype.toDataURL)) {
+                        hookingDetected = true;
+                        tamperedAPIs.push('HTMLCanvasElement.prototype.toDataURL');
+                    }
+                }
+            } catch (_) {}
+
+            try {
+                const stack = (new Error()).stack || "";
+                if (stack.includes("puppeteer") || stack.includes("playwright") ||
+                    stack.includes("__puppeteer_evaluation_script__") || stack.includes("selenium") ||
+                    stack.includes("userscript") || stack.includes("tampermonkey") || stack.includes("violentmonkey")) {
+                    hookingDetected = true;
+                    tamperedAPIs.push("bot_stack_trace");
+                }
+            } catch (_) {}
+
+            try {
+                const start = _Date_now();
+                let dummy = 0;
+                for (let i = 0; i < 2000; i++) {
+                    dummy = (dummy + (i ^ 0x3c)) & 0xFFFF;
+                }
+                const elapsed = _Date_now() - start;
+                if (elapsed > 120) {
+                    debuggerDetected = true;
+                    tamperedAPIs.push('debugger_timing_trap');
+                }
+            } catch (_) {}
+
+            return {
+                tamperingDetected: hookingDetected || debuggerDetected,
+                hookingDetected: hookingDetected,
+                debuggerDetected: debuggerDetected,
+                tamperedAPIs: tamperedAPIs
+            };
+        }
+
+        return {
+            isNativeFunction,
+            isToStringTampered,
+            auditEnvironment,
+            pristine: {
+                fetch: _fetch,
+                Date_now: _Date_now,
+                Function_toString: _Function_toString,
+                Object_freeze: _Object_freeze
+            }
+        };
+    })();
+
+    // =========================================================================
+    // ARGUS BYTECODE VM: Custom Virtual Machine for Core Cryptography & Flow
+    // =========================================================================
+    const ArgusVM = (function () {
+        // Polymorphic Opcode Seed (randomized per build)
+        const _VM_SEED = 0x4C;
+
+        // Base opcode mnemonics
+        const _OP_BASE = [
+            'PUSH_CONST', 'PUSH_INT', 'PUSH_TRUE', 'PUSH_FALSE', 'PUSH_NULL', 'POP',
+            'LOAD_REG', 'STORE_REG', 'LOAD_ENV', 'GET_PROP', 'SET_PROP',
+            'CALL_METHOD', 'CALL_FN', 'ADD', 'SUB', 'XOR', 'BIT_AND', 'EQ', 'NOT',
+            'JUMP', 'JUMP_IF_FALSE', 'MAKE_ARRAY', 'MAKE_OBJECT', 'HALT'
+        ];
+
+        // Bijective permutation mapping: derives unique dynamic opcodes
+        const OP = {};
+        const _REV_OP = {};
+        (function _initPolymorphicOpcodes(seed) {
+            const sbox = [];
+            for (let i = 0; i < 256; i++) sbox[i] = i;
+            let j = 0;
+            for (let i = 0; i < 256; i++) {
+                j = (j + sbox[i] + seed + (i * 17)) & 0xFF;
+                const tmp = sbox[i];
+                sbox[i] = sbox[j];
+                sbox[j] = tmp;
+            }
+            let pIdx = 1;
+            for (let i = 0; i < _OP_BASE.length; i++) {
+                const name = _OP_BASE[i];
+                if (name === 'HALT') {
+                    OP[name] = 0xFF;
+                } else {
+                    let code = sbox[pIdx++];
+                    if (code === 0xFF || code === 0) code = sbox[pIdx++];
+                    OP[name] = code;
+                }
+                _REV_OP[OP[name]] = name;
+            }
+        })(_VM_SEED);
+
+        function execute(program, env) {
+            const tStart = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+            const { bytecode, constPool, key } = program;
+            const stack = [];
+            const registers = new Array(32);
+            let ip = 0;
+            const len = bytecode.length;
+
+            // Rolling state cipher for bytecode in-memory stream protection
+            let rolling = 0x5A;
+            const hasKey = Boolean(key && key.length > 0);
+
+            const readByte = () => {
+                const raw = bytecode[ip++];
+                if (!hasKey) return raw;
+                const kByte = key.charCodeAt((ip - 1) % key.length);
+                const decrypted = (raw ^ kByte ^ rolling) & 0xFF;
+                rolling = (rolling * 33 + decrypted) & 0xFF;
+                return decrypted;
+            };
+
+            const readWord = () => {
+                const b1 = readByte();
+                const b2 = readByte();
+                return (b1 << 8) | b2;
+            };
+
+            const getConst = (idx) => {
+                if (!constPool) return undefined;
+                const item = constPool[idx];
+                if (typeof item === 'function') return item();
+                if (item && typeof item === 'object' && item.__enc) {
+                    let out = "";
+                    const raw = item.d;
+                    const k = key || "ARGUS_CONST_SEC";
+                    for (let i = 0; i < raw.length; i++) {
+                        out += String.fromCharCode(raw[i] ^ k.charCodeAt(i % k.length));
+                    }
+                    return out;
+                }
+                return item;
+            };
+
+            while (ip < len) {
+                const op = readByte();
+                if (op === OP.HALT) break;
+
+                switch (op) {
+                    case OP.PUSH_CONST: {
+                        stack.push(getConst(readWord()));
+                        break;
+                    }
+                    case OP.PUSH_INT: {
+                        stack.push(readWord());
+                        break;
+                    }
+                    case OP.PUSH_TRUE:
+                        stack.push(true);
+                        break;
+                    case OP.PUSH_FALSE:
+                        stack.push(false);
+                        break;
+                    case OP.PUSH_NULL:
+                        stack.push(null);
+                        break;
+                    case OP.POP:
+                        stack.pop();
+                        break;
+                    case OP.LOAD_REG: {
+                        stack.push(registers[readByte()]);
+                        break;
+                    }
+                    case OP.STORE_REG: {
+                        registers[readByte()] = stack.pop();
+                        break;
+                    }
+                    case OP.LOAD_ENV: {
+                        const name = getConst(readWord());
+                        stack.push(env && env[name] !== undefined ? env[name] : (typeof window !== 'undefined' ? window[name] : undefined));
+                        break;
+                    }
+                    case OP.GET_PROP: {
+                        const prop = stack.pop();
+                        const obj = stack.pop();
+                        stack.push(obj ? obj[prop] : undefined);
+                        break;
+                    }
+                    case OP.SET_PROP: {
+                        const val = stack.pop();
+                        const prop = stack.pop();
+                        const obj = stack.pop();
+                        if (obj) obj[prop] = val;
+                        break;
+                    }
+                    case OP.CALL_METHOD: {
+                        const argc = readByte();
+                        const args = [];
+                        for (let i = 0; i < argc; i++) args.unshift(stack.pop());
+                        const prop = stack.pop();
+                        const obj = stack.pop();
+                        stack.push(obj[prop].apply(obj, args));
+                        break;
+                    }
+                    case OP.CALL_FN: {
+                        const argc = readByte();
+                        const args = [];
+                        for (let i = 0; i < argc; i++) args.unshift(stack.pop());
+                        const fn = stack.pop();
+                        stack.push(fn.apply(null, args));
+                        break;
+                    }
+                    case OP.ADD: {
+                        const b = stack.pop();
+                        const a = stack.pop();
+                        stack.push(a + b);
+                        break;
+                    }
+                    case OP.SUB: {
+                        const b = stack.pop();
+                        const a = stack.pop();
+                        stack.push(a - b);
+                        break;
+                    }
+                    case OP.XOR: {
+                        const b = stack.pop();
+                        const a = stack.pop();
+                        stack.push(a ^ b);
+                        break;
+                    }
+                    case OP.BIT_AND: {
+                        const b = stack.pop();
+                        const a = stack.pop();
+                        stack.push(a & b);
+                        break;
+                    }
+                    case OP.EQ: {
+                        const b = stack.pop();
+                        const a = stack.pop();
+                        stack.push(a === b);
+                        break;
+                    }
+                    case OP.NOT: {
+                        stack.push(!stack.pop());
+                        break;
+                    }
+                    case OP.JUMP: {
+                        ip = readWord();
+                        break;
+                    }
+                    case OP.JUMP_IF_FALSE: {
+                        const target = readWord();
+                        if (!stack.pop()) ip = target;
+                        break;
+                    }
+                    case OP.MAKE_ARRAY: {
+                        const count = readByte();
+                        const arr = [];
+                        for (let i = 0; i < count; i++) arr.unshift(stack.pop());
+                        stack.push(arr);
+                        break;
+                    }
+                    case OP.MAKE_OBJECT: {
+                        const count = readByte();
+                        const obj = {};
+                        for (let i = 0; i < count; i++) {
+                            const val = stack.pop();
+                            const key = stack.pop();
+                            obj[key] = val;
+                        }
+                        stack.push(obj);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+
+            if (tStart > 0 && typeof Date !== 'undefined' && Date.now) {
+                const tElapsed = Date.now() - tStart;
+                if (tElapsed > 300) {
+                    if (typeof telemetryData !== 'undefined') {
+                        telemetryData.debuggerDetected = true;
+                        telemetryData.tamperingDetected = true;
+                        if (telemetryData.tamperedAPIs) telemetryData.tamperedAPIs.push('vm_debugger_breakpoint');
+                    }
+                }
+            }
+
+            return stack.length > 0 ? stack[stack.length - 1] : undefined;
+        }
+
+        // Encrypts a bytecode array using the rolling stream cipher for protected storage
+        function encryptBytecode(rawBytecode, key) {
+            if (!key || key.length === 0) return rawBytecode;
+            let rolling = 0x5A;
+            const out = [];
+            for (let i = 0; i < rawBytecode.length; i++) {
+                const b = rawBytecode[i];
+                const kByte = key.charCodeAt(i % key.length);
+                const enc = (b ^ kByte ^ rolling) & 0xFF;
+                rolling = (rolling * 33 + b) & 0xFF;
+                out.push(enc);
+            }
+            return out;
+        }
+
+        function cipher(payloadStr, sitekey) {
+            let iv = "";
+            if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
+                const arr = new Uint8Array(8);
+                window.crypto.getRandomValues(arr);
+                for (let i = 0; i < 8; i++) iv += (arr[i] < 16 ? "0" : "") + arr[i].toString(16);
+            } else {
+                for (let i = 0; i < 16; i++) iv += Math.floor(Math.random() * 16).toString(16);
+            }
+
+            const seedStr = sitekey + iv;
+            const sBox = new Uint8Array(256);
+            for (let i = 0; i < 256; i++) sBox[i] = i;
+            let j = 0;
+            for (let i = 0; i < 256; i++) {
+                j = (j + sBox[i] + seedStr.charCodeAt(i % seedStr.length)) & 0xFF;
+                const temp = sBox[i];
+                sBox[i] = sBox[j];
+                sBox[j] = temp;
+            }
+
+            let result = "";
+            let i1 = 0, j1 = 0, prev = 0xAA;
+            const len = payloadStr.length;
+            for (let k = 0; k < len; k++) {
+                i1 = (i1 + 1) & 0xFF;
+                j1 = (j1 + sBox[i1]) & 0xFF;
+                const temp = sBox[i1];
+                sBox[i1] = sBox[j1];
+                sBox[j1] = temp;
+                const keyByte = sBox[(sBox[i1] + sBox[j1]) & 0xFF];
+                const pCode = payloadStr.charCodeAt(k);
+                const cByte = (pCode ^ keyByte ^ prev) & 0xFF;
+                prev = cByte;
+                result += String.fromCharCode(cByte);
+            }
+            return "v2:" + iv + ":" + btoa(result);
+        }
+
+        function decipher(cipherStr, sitekey) {
+            if (cipherStr && cipherStr.startsWith("v2:")) {
+                const parts = cipherStr.split(":", 3);
+                const iv = parts[1];
+                const rawBytes = atob(parts[2]);
+                const seedStr = sitekey + iv;
+                const sBox = new Uint8Array(256);
+                for (let i = 0; i < 256; i++) sBox[i] = i;
+                let j = 0;
+                for (let i = 0; i < 256; i++) {
+                    j = (j + sBox[i] + seedStr.charCodeAt(i % seedStr.length)) & 0xFF;
+                    const temp = sBox[i];
+                    sBox[i] = sBox[j];
+                    sBox[j] = temp;
+                }
+                let out = "";
+                let i1 = 0, j1 = 0, prev = 0xAA;
+                for (let k = 0; k < rawBytes.length; k++) {
+                    i1 = (i1 + 1) & 0xFF;
+                    j1 = (j1 + sBox[i1]) & 0xFF;
+                    const temp = sBox[i1];
+                    sBox[i1] = sBox[j1];
+                    sBox[j1] = temp;
+                    const keyByte = sBox[(sBox[i1] + sBox[j1]) & 0xFF];
+                    const cByte = rawBytes.charCodeAt(k);
+                    const pCode = cByte ^ keyByte ^ prev;
+                    prev = cByte;
+                    out += String.fromCharCode(pCode);
+                }
+                return out;
+            } else {
+                const payloadStr = atob(cipherStr);
+                let out = "";
+                for (let i = 0; i < payloadStr.length; i++) {
+                    out += String.fromCharCode(payloadStr.charCodeAt(i) ^ sitekey.charCodeAt(i % sitekey.length));
+                }
+                return out;
+            }
+        }
+
+        function verifyVM() {
+            try {
+                const testKey = "ARGUS_VM_TEST_KEY_99";
+                const rawBc = [
+                    OP.PUSH_INT, 0x00, 0x2A,      // push 42
+                    OP.STORE_REG, 0,              // reg[0] = 42
+                    OP.LOAD_REG, 0,               // push reg[0]
+                    OP.PUSH_INT, 0x01, 0x00,      // push 256
+                    OP.ADD,                       // 42 + 256 = 298
+                    OP.PUSH_INT, 0x00, 0x0F,      // push 15
+                    OP.XOR,                       // 298 ^ 15 = 309
+                    OP.HALT
+                ];
+                const encBc = encryptBytecode(rawBc, testKey);
+                const program = {
+                    bytecode: encBc,
+                    constPool: [],
+                    key: testKey
+                };
+                const output = execute(program, {});
+                return output === ((42 + 256) ^ 15);
+            } catch (_) {
+                return false;
+            }
+        }
+
+        const vmExports = { OP, execute, cipher, decipher, verifyVM, encryptBytecode };
+        try {
+            if (typeof Object.freeze === 'function') {
+                Object.freeze(OP);
+                Object.freeze(vmExports);
+            }
+        } catch (_) {}
+        return vmExports;
+    })();
+
     // Telemetry Collection
     let telemetryData = {
         mouseEvents: 0,
@@ -29,7 +564,16 @@
         deviceMemory: navigator.deviceMemory || 0,
         audioFingerprint: "",
         clickDurations: [],
-        maxMouseVelocity: 0
+        maxMouseVelocity: 0,
+        honeypot: false,
+        honeypotTriggered: false,
+        honeypotAction: null,
+        tamperingDetected: false,
+        hookingDetected: false,
+        debuggerDetected: false,
+        tamperedAPIs: [],
+        vmExecuted: true,
+        vmIntegrityFailed: false
     };
 
     const initTime = Date.now();
@@ -89,12 +633,7 @@
     }
 
     function obfuscatePayload(payloadStr, sitekey) {
-        let result = "";
-        for (let i = 0; i < payloadStr.length; i++) {
-            let keyChar = sitekey.charCodeAt(i % sitekey.length);
-            result += String.fromCharCode(payloadStr.charCodeAt(i) ^ keyChar);
-        }
-        return btoa(result);
+        return ArgusVM.cipher(payloadStr, sitekey);
     }
 
     function detectStealthAndHeadless() {
@@ -203,6 +742,69 @@
             }
         } catch (e) {}
 
+        // 7. WebGL Hardware Shader Precision & Software Rasterizer Check (C++ layer)
+        try {
+            if (typeof document !== 'undefined' && document.createElement) {
+                const glCanvas = document.createElement('canvas');
+                const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+                if (gl) {
+                    const precFormat = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+                    if (precFormat && (precFormat.precision < 23 || precFormat.rangeMin < 62 || precFormat.rangeMax < 62)) {
+                        reasons.push('webgl_shader_precision_anomaly');
+                        isStealth = true;
+                    }
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    if (debugInfo) {
+                        const renderer = (gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '').toLowerCase();
+                        const vendor = (gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || '').toLowerCase();
+                        if (renderer.includes('swiftshader') || renderer.includes('llvmpipe') ||
+                            renderer.includes('softpipe') || renderer.includes('mesa') ||
+                            renderer.includes('virtualbox') || renderer.includes('vmware') ||
+                            vendor.includes('mesa') || renderer.includes('software rasterizer')) {
+                            reasons.push('software_rasterizer_detected:' + renderer);
+                            isStealth = true;
+                        }
+                    }
+                }
+            }
+        } catch (e) {}
+
+        // 8. AudioContext Physical DAC Channel Check
+        try {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (AudioContextClass) {
+                const aCtx = new AudioContextClass();
+                if (aCtx.destination && aCtx.destination.maxChannelCount === 0) {
+                    reasons.push('audio_hardware_missing_dac');
+                    isStealth = true;
+                }
+                if (typeof aCtx.close === 'function') aCtx.close().catch(() => {});
+            }
+        } catch (e) {}
+
+        // 9. V8 Recursion Stack Depth & Evaluation Context Check
+        try {
+            let stackDepth = 0;
+            const testRecursion = () => { stackDepth++; testRecursion(); };
+            try { testRecursion(); } catch (err) {
+                if (stackDepth < 100 || (err.stack && (err.stack.includes('__puppeteer_evaluation_script__') || err.stack.includes('debugger eval')))) {
+                    reasons.push('v8_execution_context_anomalous');
+                    isStealth = true;
+                }
+            }
+        } catch (e) {}
+
+        // 10. Chrome Object Descriptors & WebIDL Integrity Check
+        try {
+            if (window.chrome) {
+                const cDesc = Object.getOwnPropertyDescriptor(window, 'chrome');
+                if (cDesc && (!cDesc.configurable || cDesc.value === undefined)) {
+                    reasons.push('chrome_descriptor_anomaly');
+                    isStealth = true;
+                }
+            }
+        } catch (e) {}
+
         return {
             webdriver: isWebdriver,
             stealthDetected: isStealth || cdcFound || automationGlobalsFound,
@@ -289,12 +891,17 @@
     }, { passive: true });
 
     function getHoneypotValue(container) {
+        if (telemetryData.honeypot || telemetryData.honeypotTriggered) {
+            return true;
+        }
         let form = container.closest('form');
         if (form) {
             let honeypot = form.querySelector('input[name="website_url"]');
-            if (honeypot) return honeypot.value;
+            if (honeypot && honeypot.value) return true;
+            let fakeInput = form.querySelector('input[name="g-recaptcha-response"], input[name="recaptcha_verification_token"]');
+            if (fakeInput && (fakeInput.value || fakeInput.checked)) return true;
         }
-        return "";
+        return false;
     }
 
     function analyzeMouseBehavior() {
@@ -319,12 +926,16 @@
         return 0;
     }
 
+    const initializedContainers = new WeakSet();
+
     function initCaptcha() {
         const containers = document.querySelectorAll('.argus-captcha');
 
         containers.forEach(async container => {
-            if (container.dataset.initialized) return;
-            container.dataset.initialized = "true";
+            if (initializedContainers.has(container)) return;
+            initializedContainers.add(container);
+
+            let isVerified = false;
 
             const sitekey = container.dataset.sitekey;
 
@@ -361,7 +972,37 @@
                 }
             }
 
+            // Shadow DOM encapsulation for maximum stealth from external scrapers
+            let mountPoint = container;
+            if (typeof container.attachShadow === 'function') {
+                try {
+                    mountPoint = container.shadowRoot || container.attachShadow({ mode: 'open' });
+                } catch (_) {
+                    mountPoint = container;
+                }
+            }
 
+            // Randomized element identifiers and classes per visit / refresh (no obvious prefixes)
+            const randUid = Math.random().toString(36).substring(2, 9);
+            const randSalt = Math.random().toString(36).substring(2, 6);
+            const realWidgetClass = `w-${randUid}`;
+            const realBoxClass = `b-${randUid}`;
+            const realCbContainerClass = `c-${randUid}`;
+            const realTextClass = `t-${randUid}`;
+            const realSubTextClass = `s-${randUid}`;
+            const realLogoClass = `l-${randUid}`;
+            const randDataAttr = `data-r-${randSalt}`;
+
+            // Unique dynamic keyframe tokens per instance
+            const kfSpin = `sp_${randSalt}`;
+            const kfFade = `fd_${randSalt}`;
+            const kfPulse = `pl_${randSalt}`;
+            const kfDraw = `dr_${randSalt}`;
+            const kfDrawCross = `dc_${randSalt}`;
+            const kfDrawExcl = `de_${randSalt}`;
+            const kfPopIn = `pi_${randSalt}`;
+            const kfPopOut = `po_${randSalt}`;
+            const kfShake = `sk_${randSalt}`;
 
             const widget = document.createElement('div');
             const box = document.createElement('div');
@@ -398,7 +1039,9 @@
                 };
             }
 
-            widget.classList.add('argus-captcha-widget-box');
+            widget.classList.add(realWidgetClass, `_w-${randSalt}`);
+            widget.setAttribute(randDataAttr, 'widget');
+            widget.setAttribute('data-token', randUid);
             widget.style.cssText = `
                 background: ${colors.bg};
                 border-radius: 3px;
@@ -421,17 +1064,24 @@
             let isFailed = false;
 
             widget.onmouseenter = () => {
-                if (container.dataset.verified !== "true" && !isProcessing && !isFailed) {
+                if (!isVerified && !isProcessing && !isFailed) {
                     box.style.borderColor = colors.hoverBorder;
                 }
             };
 
             widget.onmouseleave = () => {
-                if (container.dataset.verified !== "true" && !isProcessing && !isFailed) {
+                if (!isVerified && !isProcessing && !isFailed) {
                     box.style.borderColor = colors.boxBorder;
                 }
             };
 
+            checkboxContainer.className = `${realCbContainerClass} c-${randSalt}`;
+            checkboxContainer.id = `chk-${randUid}`;
+            checkboxContainer.setAttribute(randDataAttr, 'check-wrap');
+            checkboxContainer.setAttribute('role', 'checkbox');
+            checkboxContainer.setAttribute('tabindex', '0');
+            checkboxContainer.setAttribute('aria-checked', 'false');
+            checkboxContainer.setAttribute('aria-label', 'Verify you are human');
             checkboxContainer.style.cssText = `
                 width: 28px;
                 height: 28px;
@@ -444,6 +1094,9 @@
                 z-index: 1;
             `;
 
+            box.className = `${realBoxClass} b-${randSalt}`;
+            box.id = `box-${randUid}`;
+            box.setAttribute(randDataAttr, 'box');
             box.style.cssText = `
                 width: 28px;
                 height: 28px;
@@ -455,18 +1108,20 @@
             `;
 
             const spinner = document.createElement('div');
+            spinner.className = `sp-${randUid}`;
             spinner.style.cssText = `
                 width: 20px;
                 height: 20px;
                 border: 3px solid rgba(59, 130, 246, 0.1);
                 border-top-color: #3b82f6;
                 border-radius: 50%;
-                animation: argus-spin 1s linear infinite;
+                animation: ${kfSpin} 1s linear infinite;
                 display: none;
                 position: absolute;
             `;
 
             const checkmark = document.createElement('div');
+            checkmark.className = `cm-${randUid}`;
             checkmark.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="14" cy="14" r="14" fill="#10b981"/><polyline points="8 14 12 18 20 10" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 50; stroke-dashoffset: 50;"></polyline></svg>`;
             checkmark.style.cssText = `
                 display: none;
@@ -474,6 +1129,7 @@
             `;
 
             const crossmark = document.createElement('div');
+            crossmark.className = `xm-${randUid}`;
             crossmark.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="14" cy="14" r="14" fill="#ef4444"/>
                 <line x1="9" y1="9" x2="19" y2="19" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray: 15; stroke-dashoffset: 15;"></line>
@@ -485,6 +1141,7 @@
             `;
 
             const exclamation = document.createElement('div');
+            exclamation.className = `ex-${randUid}`;
             exclamation.innerHTML = `<svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="14" cy="14" r="14" fill="#f59e0b"/>
                 <line x1="14" y1="8" x2="14" y2="15.5" stroke="white" stroke-width="2.6" stroke-linecap="round"></line>
@@ -502,6 +1159,7 @@
             checkboxContainer.appendChild(exclamation);
 
             const textContainer = document.createElement('div');
+            textContainer.className = `tc-${randUid}`;
             textContainer.style.cssText = `
                 flex: 1;
                 display: flex;
@@ -512,6 +1170,8 @@
             `;
 
             text.innerText = "I'm not a robot";
+            text.className = `${realTextClass} t-${randSalt}`;
+            text.setAttribute(randDataAttr, 'text');
             text.style.cssText = `
                 font-size: 14px;
                 color: ${colors.text};
@@ -522,13 +1182,14 @@
                 line-height: 1.2;
             `;
 
+            subText.className = `${realSubTextClass} s-${randSalt}`;
             subText.style.cssText = `
                 font-size: 11px;
                 color: ${colors.subText};
                 opacity: 0.85;
                 margin-top: 2px;
                 display: none;
-                animation: argus-fade 0.5s ease;
+                animation: ${kfFade} 0.5s ease;
                 white-space: normal;
                 word-break: break-word;
                 line-height: 1.25;
@@ -558,6 +1219,7 @@
             textContainer.appendChild(subText);
             textContainer.appendChild(learnMore);
 
+            logoContainer.className = realLogoClass;
             logoContainer.style.cssText = `
                 display: flex;
                 flex-direction: column;
@@ -693,7 +1355,7 @@
                 document.body.appendChild(badge);
             }
 
-            container.appendChild(widget);
+            mountPoint.appendChild(widget);
 
             if (isTestMode) {
                 const testBanner = document.createElement('div');
@@ -710,21 +1372,80 @@
                 textContainer.appendChild(testBanner);
             }
 
-            // Inject Honeypot
+            // Inject Honeypot Fake Captcha Box inside mountPoint for automated crawlers and scrapers
+            const fakeCaptchaBox = document.createElement('div');
+            fakeCaptchaBox.className = 'recaptcha-checkbox-container g-recaptcha cf-turnstile-wrapper h-captcha-box captcha-fake-box';
+            fakeCaptchaBox.id = 'recaptcha-anchor-wrap';
+            fakeCaptchaBox.setAttribute('aria-hidden', 'true');
+            fakeCaptchaBox.style.cssText = 'position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; opacity: 0.001 !important; pointer-events: auto !important; z-index: -9999 !important;';
+
+            const fakeCheckbox = document.createElement('div');
+            fakeCheckbox.id = 'recaptcha-anchor';
+            fakeCheckbox.className = 'recaptcha-checkbox goog-inline-block cf-turnstile-anchor hcaptcha-anchor captcha-verify-box';
+            fakeCheckbox.setAttribute('role', 'checkbox');
+            fakeCheckbox.setAttribute('aria-checked', 'false');
+            fakeCheckbox.setAttribute('aria-label', "I'm not a robot");
+            fakeCheckbox.tabIndex = -1;
+
+            const fakeInput = document.createElement('input');
+            fakeInput.type = 'checkbox';
+            fakeInput.name = 'g-recaptcha-response';
+            fakeInput.className = 'g-recaptcha-input recaptcha-token';
+            fakeInput.tabIndex = -1;
+            fakeInput.autocomplete = 'off';
+
+            const fakeTextInput = document.createElement('input');
+            fakeTextInput.type = 'text';
+            fakeTextInput.name = 'recaptcha_verification_token';
+            fakeTextInput.className = 'h-captcha-response cf-turnstile-response';
+            fakeTextInput.tabIndex = -1;
+            fakeTextInput.autocomplete = 'off';
+
+            fakeCheckbox.appendChild(fakeInput);
+            fakeCheckbox.appendChild(fakeTextInput);
+            fakeCaptchaBox.appendChild(fakeCheckbox);
+
+            const triggerHoneypotTrap = (e) => {
+                telemetryData.honeypot = true;
+                telemetryData.honeypotTriggered = true;
+                telemetryData.honeypotAction = e ? e.type : 'interaction';
+                try {
+                    if (e && e.stopPropagation) e.stopPropagation();
+                } catch (_) {}
+                if (e && (e.type === 'click' || e.type === 'mousedown')) {
+                    executeChallenge();
+                }
+            };
+
+            const trapEvents = ['click', 'mousedown', 'mouseup', 'touchstart', 'focus', 'focusin', 'keydown', 'change', 'input'];
+            trapEvents.forEach(evt => {
+                fakeCaptchaBox.addEventListener(evt, triggerHoneypotTrap, { capture: true, passive: true });
+                fakeCheckbox.addEventListener(evt, triggerHoneypotTrap, { capture: true, passive: true });
+                fakeInput.addEventListener(evt, triggerHoneypotTrap, { capture: true, passive: true });
+                fakeTextInput.addEventListener(evt, triggerHoneypotTrap, { capture: true, passive: true });
+            });
+
+            mountPoint.appendChild(fakeCaptchaBox);
+
             let form = container.closest('form');
-            if (form && !form.querySelector('input[name="website_url"]')) {
+            if (form && !form.querySelector('input[data-trap="true"]')) {
                 let honeypot = document.createElement('input');
                 honeypot.type = 'text';
                 honeypot.name = 'website_url';
-                honeypot.setAttribute('style', 'position:absolute; top:-9999px; left:-9999px; opacity:0; z-index:-1;');
+                honeypot.setAttribute('data-trap', 'true');
+                honeypot.setAttribute('style', 'position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; opacity: 0.001 !important; pointer-events: none !important;');
                 honeypot.tabIndex = -1;
                 honeypot.autocomplete = 'off';
+                honeypot.addEventListener('input', triggerHoneypotTrap, { capture: true, passive: true });
+                honeypot.addEventListener('change', triggerHoneypotTrap, { capture: true, passive: true });
                 form.appendChild(honeypot);
             }
 
-            // Visual Challenge UI Modal Overlay
+            // Visual Challenge UI Modal Overlay (lazily attached on demand, never lingering)
             const visualOverlay = document.createElement('div');
-            visualOverlay.id = 'argus-visual-overlay';
+            visualOverlay.id = `ovl_${randUid}`;
+            visualOverlay.className = `m_${randSalt}`;
+            visualOverlay.setAttribute(randDataAttr, 'overlay');
             visualOverlay.style.cssText = `
                 display: none;
                 position: fixed;
@@ -742,7 +1463,9 @@
             `;
 
             const visualContainer = document.createElement('div');
-            visualContainer.id = 'argus-visual-container';
+            visualContainer.id = `vc_${randUid}`;
+            visualContainer.className = `modal-${randUid}`;
+            visualContainer.setAttribute(randDataAttr, 'modal');
             visualContainer.style.cssText = `
                 width: 100%;
                 max-width: 380px;
@@ -757,20 +1480,32 @@
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             `;
 
+            const showModal = () => {
+                if (!document.body.contains(visualOverlay)) {
+                    document.body.appendChild(visualOverlay);
+                }
+                visualOverlay.style.display = 'flex';
+            };
+
             const closeModal = () => {
                 visualOverlay.style.display = 'none';
+                if (document.body.contains(visualOverlay)) {
+                    visualOverlay.remove();
+                }
                 isProcessing = false;
                 isFailed = false;
                 spinner.style.display = 'none';
                 crossmark.style.display = 'none';
                 checkmark.style.display = 'none';
                 exclamation.style.display = 'none';
-                box.style.display = 'block';
-                box.style.borderColor = colors.boxBorder;
-                text.innerText = "I'm not a robot";
-                text.style.color = colors.text;
-                subText.style.display = 'none';
-                widget.style.borderColor = colors.border;
+                if (!isVerified) {
+                    box.style.display = 'block';
+                    box.style.borderColor = colors.boxBorder;
+                    text.innerText = "I'm not a robot";
+                    text.style.color = colors.text;
+                    subText.style.display = 'none';
+                    widget.style.borderColor = colors.border;
+                }
             };
 
             const createHeaderIconBtn = (svgHtml, title, onClick) => {
@@ -900,76 +1635,80 @@
             };
 
             visualOverlay.appendChild(visualContainer);
-            document.body.appendChild(visualOverlay);
 
-            if (!document.getElementById('argus-captcha-styles')) {
-                const style = document.createElement('style');
-                style.id = 'argus-captcha-styles';
-                style.innerHTML = `
-                    #argus-visual-overlay * {
-                        box-sizing: border-box !important;
+            const style = document.createElement('style');
+            style.id = `st_${randSalt}`;
+            style.innerHTML = `
+                #${visualOverlay.id} * {
+                    box-sizing: border-box !important;
+                }
+                #${visualOverlay.id} button {
+                    font-family: inherit !important;
+                    text-transform: none !important;
+                    margin: 0;
+                }
+                @keyframes ${kfSpin} { to { transform: rotate(360deg); } }
+                @keyframes ${kfFade} { from { opacity: 0; } to { opacity: 1; } }
+                @keyframes ${kfPulse} { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+                @keyframes ${kfDraw} {
+                    from { stroke-dashoffset: 50; }
+                    to { stroke-dashoffset: 0; }
+                }
+                @keyframes ${kfDrawCross} {
+                    from { stroke-dashoffset: 15; }
+                    to { stroke-dashoffset: 0; }
+                }
+                @keyframes ${kfDrawExcl} {
+                    from { stroke-dashoffset: 10; }
+                    to { stroke-dashoffset: 0; }
+                }
+                @keyframes ${kfPopIn} {
+                    0% { transform: scale(0); opacity: 0; }
+                    60% { transform: scale(1.15); opacity: 1; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+                @keyframes ${kfPopOut} {
+                    0% { transform: scale(1); opacity: 1; }
+                    100% { transform: scale(0.8); opacity: 0; }
+                }
+                @keyframes ${kfShake} {
+                    0%, 100% { transform: translateX(0); }
+                    25% { transform: translateX(-5px); }
+                    75% { transform: translateX(5px); }
+                }
+                .${realWidgetClass} {
+                    width: 340px;
+                    max-width: 100%;
+                    height: 78px;
+                }
+                @media (max-width: 380px) {
+                    .${realWidgetClass} {
+                        width: 100%;
+                        height: 72px;
                     }
-                    #argus-visual-overlay button {
-                        font-family: inherit !important;
-                        text-transform: none !important;
-                        margin: 0;
-                    }
-                    @keyframes argus-spin { to { transform: rotate(360deg); } }
-                    @keyframes argus-fade { from { opacity: 0; } to { opacity: 1; } }
-                    @keyframes argus-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-                    @keyframes argus-draw {
-                        from { stroke-dashoffset: 50; }
-                        to { stroke-dashoffset: 0; }
-                    }
-                    @keyframes argus-draw-cross {
-                        from { stroke-dashoffset: 15; }
-                        to { stroke-dashoffset: 0; }
-                    }
-                    @keyframes argus-draw-exclamation {
-                        from { stroke-dashoffset: 10; }
-                        to { stroke-dashoffset: 0; }
-                    }
-                    @keyframes argus-pop-in {
-                        0% { transform: scale(0); opacity: 0; }
-                        60% { transform: scale(1.15); opacity: 1; }
-                        100% { transform: scale(1); opacity: 1; }
-                    }
-                    @keyframes argus-pop-out {
-                        0% { transform: scale(1); opacity: 1; }
-                        100% { transform: scale(0.8); opacity: 0; }
-                    }
-                    @keyframes argus-shake {
-                        0%, 100% { transform: translateX(0); }
-                        25% { transform: translateX(-5px); }
-                        75% { transform: translateX(5px); }
-                    }
-                    .argus-captcha-widget-box {
-                        width: 340px;
-                        max-width: 100%;
-                        height: 78px;
-                    }
-                    @media (max-width: 380px) {
-                        .argus-captcha-widget-box {
-                            width: 100%;
-                            height: 72px;
-                        }
-                    }
-                `;
-                document.head.appendChild(style);
+                }
+            `;
+            document.head.appendChild(style);
+            if (mountPoint !== container) {
+                mountPoint.appendChild(style.cloneNode(true));
             }
 
             const injectToken = (token) => {
+                isVerified = true;
+                if (document.body.contains(visualOverlay)) {
+                    visualOverlay.remove();
+                }
                 spinner.style.display = 'none';
                 box.style.display = 'none';
                 checkmark.style.display = 'block';
                 checkmark.style.animation = 'none';
                 void checkmark.offsetWidth;
-                checkmark.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
+                checkmark.style.animation = `${kfPopIn} 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`;
 
                 const polyline = checkmark.querySelector('polyline');
                 polyline.style.animation = 'none';
                 void polyline.offsetWidth;
-                polyline.style.animation = 'argus-draw 0.4s ease 0.2s both';
+                polyline.style.animation = `${kfDraw} 0.4s ease 0.2s both`;
 
                 text.innerText = "Success!";
                 text.style.color = '#10b981';
@@ -978,8 +1717,7 @@
                 widget.style.borderColor = '#10b981';
                 widget.style.boxShadow = '0 0 0 1px rgba(16, 185, 129, 0.2)';
 
-                container.dataset.verified = "true";
-                container.dispatchEvent(new CustomEvent('argus-captcha-verified', { detail: { token } }));
+                container.dispatchEvent(new CustomEvent('argus-captcha-verified', { bubbles: true, composed: true, detail: { token } }));
 
 
 
@@ -1059,7 +1797,7 @@
                     exclamation.style.display = 'block';
                     exclamation.style.animation = 'none';
                     void exclamation.offsetWidth;
-                    exclamation.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
+                    exclamation.style.animation = `${kfPopIn} 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`;
 
                     text.innerText = "Error";
                     text.style.color = '#f59e0b';
@@ -1102,7 +1840,7 @@
                     widget.style.borderColor = 'rgba(245, 158, 11, 0.6)';
                     widget.style.boxShadow = '0 0 0 1px rgba(245, 158, 11, 0.2), 0 2px 8px rgba(245, 158, 11, 0.08)';
                     widget.style.cursor = 'not-allowed';
-                    widget.title = `Argus Error: ${desc} - ${msg}`;
+                    widget.title = `Error: ${desc} - ${msg}`;
 
                     // If network error, provide click-to-retry
                     if (String(msg).toLowerCase().includes('network') || String(msg).toLowerCase().includes('connection') || String(msg).toLowerCase().includes('fetch')) {
@@ -1131,14 +1869,14 @@
                 crossmark.style.display = 'block';
                 crossmark.style.animation = 'none';
                 void crossmark.offsetWidth;
-                crossmark.style.animation = 'argus-pop-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards';
+                crossmark.style.animation = `${kfPopIn} 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`;
 
                 const lines = crossmark.querySelectorAll('line');
                 lines[0].style.animation = 'none';
                 lines[1].style.animation = 'none';
                 void crossmark.offsetWidth;
-                lines[0].style.animation = 'argus-draw-cross 0.3s ease 0.2s both';
-                lines[1].style.animation = 'argus-draw-cross 0.3s ease 0.35s both';
+                lines[0].style.animation = `${kfDrawCross} 0.3s ease 0.2s both`;
+                lines[1].style.animation = `${kfDrawCross} 0.3s ease 0.35s both`;
 
                 text.innerText = "Failed!";
                 text.style.color = colors.text;
@@ -1147,8 +1885,8 @@
 
                 // Allow them to click again after 3 seconds
                 setTimeout(() => {
-                    if (container.dataset.verified !== "true") {
-                        crossmark.style.animation = 'argus-pop-out 0.4s ease forwards';
+                    if (!isVerified) {
+                        crossmark.style.animation = `${kfPopOut} 0.4s ease forwards`;
                         text.style.color = colors.text;
                         widget.style.borderColor = colors.border;
 
@@ -1194,6 +1932,16 @@
                     const stealthReport = detectStealthAndHeadless();
                     telemetryData.webdriver = Boolean(stealthReport.webdriver);
 
+                    const shieldReport = ArgusShield.auditEnvironment();
+                    telemetryData.tamperingDetected = shieldReport.tamperingDetected;
+                    telemetryData.hookingDetected = shieldReport.hookingDetected;
+                    telemetryData.debuggerDetected = shieldReport.debuggerDetected;
+                    telemetryData.tamperedAPIs = shieldReport.tamperedAPIs;
+
+                    const vmOk = ArgusVM.verifyVM();
+                    telemetryData.vmExecuted = true;
+                    telemetryData.vmIntegrityFailed = !vmOk;
+
                     const rawTelemetry = {
                         webdriver: telemetryData.webdriver,
                         stealthDetected: stealthReport.stealthDetected,
@@ -1216,21 +1964,30 @@
                         audioFingerprint: telemetryData.audioFingerprint,
                         clickDurations: telemetryData.clickDurations,
                         maxMouseVelocity: telemetryData.maxMouseVelocity,
-                        honeypot: getHoneypotValue(container),
+                        honeypot: Boolean(getHoneypotValue(container) || telemetryData.honeypot),
+                        honeypotTriggered: Boolean(telemetryData.honeypotTriggered),
+                        honeypotAction: telemetryData.honeypotAction || null,
+                        tamperingDetected: Boolean(telemetryData.tamperingDetected),
+                        hookingDetected: Boolean(telemetryData.hookingDetected),
+                        debuggerDetected: Boolean(telemetryData.debuggerDetected),
+                        tamperedAPIs: telemetryData.tamperedAPIs || [],
+                        vmExecuted: Boolean(telemetryData.vmExecuted),
+                        vmIntegrityFailed: Boolean(telemetryData.vmIntegrityFailed),
                         forceVisual: window.forceArgusVisual === true,
                         forceChallenge: window.forceArgusChallenge || null,
                         url: window.location.href,
                         pow: powData
                     };
 
-                    const tData = obfuscatePayload(JSON.stringify(rawTelemetry), sitekey);
+                    const tData = ArgusVM.cipher(JSON.stringify(rawTelemetry), sitekey);
 
                     const payload = {
                         sitekey: sitekey,
                         telemetry: tData
                     };
 
-                    const res = await fetch(`${HOST}/v1/captcha/challenge`, {
+                    const fetchFn = (ArgusShield.pristine && ArgusShield.pristine.fetch) ? ArgusShield.pristine.fetch : window.fetch;
+                    const res = await fetchFn(`${HOST}/v1/captcha/challenge`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -1405,7 +2162,7 @@
                             renderModalHeader("Audio Challenge", "Preparing audio challenge...", null, null);
                             const loadDiv = document.createElement('div');
                             loadDiv.style.cssText = `padding: 40px 20px; text-align: center; color: ${colors.subText}; font-size: 14px; font-family: inherit;`;
-                            loadDiv.innerHTML = '<div style="display:inline-block;width:32px;height:32px;border:3px solid #3b82f6;border-top:3px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;margin-bottom:12px;"></div><div>Synthesizing audio challenge...</div>';
+                            loadDiv.innerHTML = `<div style="display:inline-block;width:32px;height:32px;border:3px solid #3b82f6;border-top:3px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;margin-bottom:12px;"></div><div>Synthesizing audio challenge...</div>`;
                             visualContainer.appendChild(loadDiv);
                         };
 
@@ -1490,7 +2247,7 @@
                                 playBtn.style.transform = 'scale(0.92)';
                                 setTimeout(() => { playBtn.style.transform = 'scale(1)'; }, 150);
                                 playLabel.innerText = "Playing...";
-                                playBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:argus-pulse 1s infinite;display:block;flex-shrink:0;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>`;
+                                playBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:${kfPulse} 1s infinite;display:block;flex-shrink:0;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>`;
                                 audioObj.currentTime = 0;
                                 audioObj.play().catch(() => {
                                     playLabel.innerText = "Click to replay";
@@ -1562,7 +2319,7 @@
                                     return;
                                 }
                                 aVerifyBtn.disabled = true;
-                                aVerifyBtn.innerHTML = '<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...';
+                                aVerifyBtn.innerHTML = `<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...`;
                                 try {
                                     const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
                                         method: 'POST',
@@ -1576,16 +2333,16 @@
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
                                         if (audioObj) audioObj.pause();
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         injectToken(visData.token);
                                     } else {
                                         if (audioObj) audioObj.pause();
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
                                     if (audioObj) audioObj.pause();
-                                    visualOverlay.style.display = 'none';
+                                    closeModal();
                                     triggerError('Validation failed', false);
                                 }
                             };
@@ -1596,7 +2353,7 @@
                             };
 
                             visualContainer.appendChild(aVerifyBtn);
-                            visualOverlay.style.display = 'flex';
+                            showModal();
                             setTimeout(() => {
                                 audioInput.focus();
                                 playBtn.click();
@@ -1640,7 +2397,7 @@
 
                             visualContainer.appendChild(bgContainer);
                             visualContainer.appendChild(sliderTrack);
-                            visualOverlay.style.display = 'flex';
+                            showModal();
 
                             const visualTicket = data.visual_ticket;
                             let isDragging = false;
@@ -1669,7 +2426,7 @@
                                 sliderHandle.style.cursor = 'grab';
 
                                 // Submit
-                                sliderHandle.innerHTML = '<div style="width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;"></div>';
+                                sliderHandle.innerHTML = `<div style="width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;"></div>`;
                                 try {
                                     // Map currentX back to the native 320px scale backend expects
                                     const nativeAnswer = currentX * (320 / sliderTrack.clientWidth);
@@ -1684,14 +2441,14 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         injectToken(visData.token);
                                     } else {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
-                                    visualOverlay.style.display = 'none';
+                                    closeModal();
                                     triggerError('Validation failed', false);
                                 }
                             };
@@ -1922,7 +2679,7 @@
 
                             verifyBtn.onclick = async () => {
                                 verifyBtn.disabled = true;
-                                verifyBtn.innerHTML = '<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:argus-spin 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...';
+                                verifyBtn.innerHTML = `<div style="display:inline-block;width:16px;height:16px;border:2px solid white;border-top:2px solid transparent;border-radius:50%;animation:${kfSpin} 1s linear infinite;vertical-align:middle;margin-right:6px;"></div> Verifying...`;
                                 try {
                                     const vRes = await fetch(`${HOST}/v1/captcha/visual-verify`, {
                                         method: 'POST',
@@ -1935,21 +2692,21 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         injectToken(visData.token);
                                     } else {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
-                                    visualOverlay.style.display = 'none';
+                                    closeModal();
                                     triggerError('Validation failed', false);
                                 }
                             };
 
                             rotWrapper.appendChild(verifyBtn);
                             visualContainer.appendChild(rotWrapper);
-                            visualOverlay.style.display = 'flex';
+                            showModal();
 
                         } else {
                             headerInfo.descEl.innerText = "Type the text from the image below.";
@@ -1972,7 +2729,7 @@
                             visualContainer.appendChild(visualImg);
                             visualContainer.appendChild(visualInput);
                             visualContainer.appendChild(visualBtn);
-                            visualOverlay.style.display = 'flex';
+                            showModal();
                             visualInput.focus();
 
                             const visualTicket = data.visual_ticket;
@@ -1987,14 +2744,14 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         injectToken(visData.token);
                                     } else {
-                                        visualOverlay.style.display = 'none';
+                                        closeModal();
                                         triggerError('Validation failed', false);
                                     }
                                 } catch (e) {
-                                    visualOverlay.style.display = 'none';
+                                    closeModal();
                                     triggerError('Validation failed', false);
                                 }
                             };
@@ -2028,17 +2785,17 @@
                 checkboxContainer.addEventListener('click', executeChallenge);
                 if (form) {
                     form.addEventListener('submit', (e) => {
-                        if (container.dataset.verified !== "true") {
+                        if (!isVerified) {
                             e.preventDefault();
 
                             widget.style.animation = 'none';
                             void widget.offsetWidth;
-                            widget.style.animation = 'argus-shake 0.4s ease';
+                            widget.style.animation = `${kfShake} 0.4s ease`;
 
                             const oldBorder = widget.style.borderColor;
                             widget.style.borderColor = '#ef4444';
                             setTimeout(() => {
-                                if (container.dataset.verified !== "true") {
+                                if (!isVerified) {
                                     widget.style.borderColor = oldBorder || colors.border;
                                 }
                             }, 1000);
@@ -2051,7 +2808,7 @@
                 widget.style.display = 'none';
                 if (form) {
                     form.addEventListener('submit', (e) => {
-                        if (container.dataset.verified !== "true") {
+                        if (!isVerified) {
                             e.preventDefault();
                             executeChallenge();
                         }

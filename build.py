@@ -60,8 +60,42 @@ def build():
     
     # Ensure static directory exists
     os.makedirs("static", exist_ok=True)
+
+    # 1. Randomize the Polymorphic VM Seed in templates/api/captcha_api.js
+    import random
+    new_seed = random.randint(1, 254)
+    print(f"Generating polymorphic VM opcode permutation with seed: 0x{new_seed:02X}...")
+    try:
+        with open(src, "r", encoding="utf-8") as f:
+            code = f.read()
+        import re
+        code = re.sub(r'const _VM_SEED = 0x[0-9a-fA-F]+;', f'const _VM_SEED = 0x{new_seed:02X};', code)
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(code)
+    except Exception as e:
+        print(f"[WARN] Could not mutate _VM_SEED: {e}")
     
-    cmd = f"javascript-obfuscator {src} --output {dest} --compact true --control-flow-flattening true --dead-code-injection true --disable-console-output true --string-array true --string-array-encoding rc4 --string-array-threshold 0.75"
+    # 2. Multi-Tier Anti-Reverse Engineering Obfuscation Pipeline
+    # Disperses string lookup calls into chained arithmetic wrappers to defeat automated AST unpackers
+    cmd = (
+        f"npx javascript-obfuscator {src} --output {dest} "
+        f"--compact true "
+        f"--control-flow-flattening true --control-flow-flattening-threshold 1 "
+        f"--dead-code-injection true --dead-code-injection-threshold 0.4 "
+        f"--disable-console-output true "
+        f"--string-array true --string-array-encoding rc4 --string-array-threshold 1 "
+        f"--string-array-calls-transform true --string-array-calls-transform-threshold 1 "
+        f"--string-array-wrappers-count 5 --string-array-wrappers-chained-calls true "
+        f"--string-array-wrappers-type function "
+        f"--string-array-index-shift true --string-array-indexes-type hexadecimal-numeric-string "
+        f"--string-array-shuffle true "
+        f"--split-strings true --split-strings-chunk-length 5 "
+        f"--transform-object-keys true --numbers-to-expressions true "
+        f"--identifier-names-generator hexadecimal "
+        f"--self-defending true "
+        f"--vm-obfuscation true --vm-dynamic-opcodes true --vm-self-defending true "
+        f"--vm-opcode-shuffle true --vm-bytecode-encoding true --vm-indirect-dispatch true"
+    )
     
     try:
         subprocess.run(cmd, shell=True, check=True)
