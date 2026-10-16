@@ -1648,3 +1648,26 @@ def get_stats():
         "recent_stats": recent_stats,
         "recent_logs": recent_logs
     })
+
+@captcha_bp.route('/report', methods=['POST', 'OPTIONS'])
+@limiter.limit("30 per minute")
+def report_problem():
+    """Receives user problem reports from the Argus Captcha widget."""
+    if request.method == 'OPTIONS':
+        return '', 204
+        
+    data = request.get_json(silent=True) or {}
+    site_key = data.get('sitekey') or data.get('site_key') or request.args.get('sitekey')
+    reason = data.get('reason', 'unspecified')
+    details = data.get('details', '')
+    url = data.get('url', request.headers.get('Referer', 'unknown'))
+    ip_addr = get_client_ip()
+    
+    current_app.logger.info(
+        f"[CAPTCHA_REPORT] sitekey={site_key} reason={reason} url={url} ip={ip_addr} details={details[:100]}"
+    )
+    
+    return jsonify({
+        "success": True,
+        "message": "Report received successfully"
+    })
