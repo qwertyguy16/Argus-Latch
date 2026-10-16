@@ -128,6 +128,9 @@ class MockTestApp:
         self.is_test = True
         self.test_type = test_type
 
+_app_sitekey_cache = {} # site_key -> (app_obj, timestamp)
+_app_secret_cache = {}  # secret_key -> (app_obj, timestamp)
+
 def get_app_by_sitekey(site_key):
     if not site_key:
         return None
@@ -135,8 +138,15 @@ def get_app_by_sitekey(site_key):
     if site_key in TEST_KEYS:
         data = TEST_KEYS[site_key]
         return MockTestApp(site_key, data['secret'], data['type'])
+    now = time.time()
+    cached = _app_sitekey_cache.get(site_key)
+    if cached and now - cached[1] < 300:
+        return cached[0]
     try:
-        return CaptchaApplication.query.filter_by(site_key=site_key).first()
+        app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+        if app:
+            _app_sitekey_cache[site_key] = (app, now)
+        return app
     except Exception as e:
         import logging
         logging.error(f"Error querying CaptchaApplication by site_key '{site_key}': {e}")
@@ -149,8 +159,15 @@ def get_app_by_secret(secret_key):
     for sk, data in TEST_KEYS.items():
         if data['secret'] == secret_key:
             return MockTestApp(sk, secret_key, data['type'])
+    now = time.time()
+    cached = _app_secret_cache.get(secret_key)
+    if cached and now - cached[1] < 300:
+        return cached[0]
     try:
-        return CaptchaApplication.query.filter_by(secret_key=secret_key).first()
+        app = CaptchaApplication.query.filter_by(secret_key=secret_key).first()
+        if app:
+            _app_secret_cache[secret_key] = (app, now)
+        return app
     except Exception as e:
         import logging
         logging.error(f"Error querying CaptchaApplication by secret_key: {e}")
@@ -653,10 +670,10 @@ def get_settings():
     if not site_key:
         return jsonify({"success": False, "error": "Missing sitekey"}), 400
         
-    # Check memory cache first (60s TTL)
+    # Check memory cache first (600s TTL)
     now = time.time()
     cache_entry = settings_cache.get(site_key)
-    if cache_entry and now - cache_entry['timestamp'] < 60:
+    if cache_entry and now - cache_entry['timestamp'] < 600:
         app_theme = cache_entry['theme']
         app_mode = cache_entry['mode']
         app_domains = cache_entry['domains']
@@ -694,7 +711,8 @@ def get_settings():
         return jsonify({"success": False, "error": "Domain not authorized"}), 403
 
     client_ip = get_client_ip()
-    vpn_detected = check_ip_vpn(client_ip)
+    # Fast non-blocking lookup for /settings so client never experiences external API latency
+    vpn_detected = check_ip_vpn(client_ip, sync=False)
 
     # Calculate dynamic PoW difficulty:
     # Level 4: Standard clean clients ("0000" prefix, instant verification)
@@ -733,7 +751,7 @@ def add_cors_headers(response):
 _vpn_cache = {} # ip -> (is_vpn, timestamp)
 _vpn_circuit_breaker_until = 0
 
-def check_ip_vpn(client_ip):
+def check_ip_vpn(client_ip, sync=True):
     global _vpn_circuit_breaker_until
     if not client_ip:
         return False
@@ -749,29 +767,38 @@ def check_ip_vpn(client_ip):
     now = time.time()
     if client_ip in _vpn_cache:
         val, ts = _vpn_cache[client_ip]
-        if now - ts < 3600:
+        if now - ts < 86400: # 24h cache
             return val
 
     if now < _vpn_circuit_breaker_until:
         return False
 
-    try:
-        import urllib.request
-        import json
-        req = urllib.request.Request(
-            f"https://ip-api.com/json/{client_ip}?fields=proxy,hosting",
-            headers={'User-Agent': 'Argus-Latch/1.0'}
-        )
-        with urllib.request.urlopen(req, timeout=0.8) as response:
-            ip_data = json.loads(response.read().decode())
-            is_vpn = bool(ip_data.get('proxy') or ip_data.get('hosting'))
-            _vpn_cache[client_ip] = (is_vpn, now)
-            if len(_vpn_cache) > 5000:
-                _vpn_cache.clear()
-            return is_vpn
-    except Exception:
-        _vpn_circuit_breaker_until = now + 30
+    def _do_lookup(target_ip):
+        global _vpn_circuit_breaker_until
+        try:
+            import urllib.request
+            import json
+            req = urllib.request.Request(
+                f"https://ip-api.com/json/{target_ip}?fields=proxy,hosting",
+                headers={'User-Agent': 'Argus-Latch/1.0'}
+            )
+            with urllib.request.urlopen(req, timeout=0.6) as response:
+                ip_data = json.loads(response.read().decode())
+                is_vpn = bool(ip_data.get('proxy') or ip_data.get('hosting'))
+                _vpn_cache[target_ip] = (is_vpn, time.time())
+                if len(_vpn_cache) > 10000:
+                    _vpn_cache.clear()
+                return is_vpn
+        except Exception:
+            _vpn_circuit_breaker_until = time.time() + 30
+            return False
+
+    if not sync:
+        # Non-blocking async background resolution: immediately return False to never delay /settings
+        threading.Thread(target=_do_lookup, args=(client_ip,), daemon=True).start()
         return False
+
+    return _do_lookup(client_ip)
 
 def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
     from models import CaptchaLog
@@ -833,6 +860,46 @@ def upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, te
         import logging
         logging.error(f"Failed to upsert captcha log: {e}")
         db.session.rollback()
+
+def async_upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
+    if not site_key or site_key in TEST_KEYS:
+        return
+    try:
+        from flask import current_app
+        app_obj = current_app._get_current_object()
+        def _run_log():
+            with app_obj.app_context():
+                upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry)
+        threading.Thread(target=_run_log, daemon=True).start()
+    except Exception:
+        pass
+
+def async_increment_challenges(site_key):
+    if not site_key or site_key in TEST_KEYS:
+        return
+    try:
+        from flask import current_app
+        app_obj = current_app._get_current_object()
+        def _run_inc():
+            with app_obj.app_context():
+                try:
+                    from models import CaptchaApplication
+                    from extensions import db
+                    target_app = CaptchaApplication.query.filter_by(site_key=site_key).first()
+                    if target_app:
+                        target_app.total_challenges = (target_app.total_challenges or 0) + 1
+                        db.session.commit()
+                except Exception:
+                    pass
+        threading.Thread(target=_run_inc, daemon=True).start()
+    except Exception:
+        pass
+
+def log_captcha_event(app, site_key, status, risk_score, client_ip, vpn_detected, telemetry=None):
+    if getattr(app, 'is_test', False):
+        upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry)
+    else:
+        async_upsert_captcha_log(site_key, status, risk_score, client_ip, vpn_detected, telemetry)
 
 @captcha_bp.route('/challenge', methods=['POST', 'OPTIONS'])
 @limiter.limit("20 per minute")
@@ -915,16 +982,9 @@ def challenge():
                 return jsonify({"success": False, "error": "Domain authorization failed: Origin header required in strict mode."}), 403
             domain_header_missing = True
 
-    # Increment challenges
+    # Increment challenges asynchronously (zero request latency)
     if not getattr(app, 'is_test', False):
-        app.total_challenges = (app.total_challenges or 0) + 1
-        db.session.add(app)
-        try:
-            db.session.commit()
-        except Exception as e:
-            import logging
-            logging.error(f"Failed to commit challenge increment: {e}")
-            db.session.rollback()
+        async_increment_challenges(site_key)
 
     # 2. Intelligence: Probabilistic Telemetry Analysis
     client_ip = get_client_ip()
@@ -945,7 +1005,7 @@ def challenge():
         risk_score += 0.3
             
     if getattr(app, 'block_vpns', False) and vpn_detected:
-        upsert_captcha_log(site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
+        log_captcha_event(app, site_key, "FAIL", risk_score, client_ip, vpn_detected, telemetry)
         return jsonify({"success": False, "error": "VPNs and Proxies are blocked by this application."}), 403
 
     # Modern Headless & Stealth Framework Detection
@@ -1133,7 +1193,7 @@ def challenge():
         stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str}{honey_str}{tamper_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB{stealth_str}"
         if current_app.debug:
             print(f"[CAPTCHA] Challenge Validation [FAIL] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
-        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, vpn_detected, telemetry)
+        log_captcha_event(app, site_key, "FAIL", 1.0, client_ip, vpn_detected, telemetry)
             
         error_msg = "Security validation failed. Environment tampering detected." if tamper_detected else "Security validation failed. High risk detected."
         return jsonify({"success": False, "error": error_msg}), 403
@@ -1173,7 +1233,7 @@ def challenge():
                 visual_ticket = f"{payload}.{vis_sig}"
             else:
                 visual_ticket = encrypt_ticket(app.secret_key, 'aud', challenge_string, digits_str, timestamp)
-            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            log_captcha_event(app, site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
                 "success": False,
@@ -1192,7 +1252,7 @@ def challenge():
                 visual_ticket = f"{payload}.{vis_sig}"
             else:
                 visual_ticket = encrypt_ticket(app.secret_key, 'rot', challenge_string, target_angle, timestamp)
-            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            log_captcha_event(app, site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
                 "success": False,
@@ -1210,7 +1270,7 @@ def challenge():
                 visual_ticket = f"{payload}.{vis_sig}"
             else:
                 visual_ticket = encrypt_ticket(app.secret_key, 'sli', challenge_string, target_x, timestamp)
-            upsert_captcha_log(site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
+            log_captcha_event(app, site_key, "CHALLENGE", risk_score, client_ip, vpn_detected, telemetry)
             
             return jsonify({
                 "success": False,
@@ -1228,7 +1288,7 @@ def challenge():
     stats = f"IP: {client_ip} | VPN: {'Yes' if vpn_detected else 'No'}{pow_str} | TimeOnPage: {telemetry.get('timeOnPage', 'N/A')}ms | MouseScore: {telemetry.get('mouseScore', 'N/A')} | HW: {telemetry.get('hardwareConcurrency', 'N/A')}C/{telemetry.get('deviceMemory', 'N/A')}GB"
     if current_app.debug:
         print(f"[CAPTCHA] Challenge Validation [PASS] (Risk: {risk_score:.2f}) | Time: {datetime.utcnow().isoformat()}Z | Website: {telemetry.get('url', 'Unknown')} | {stats}")
-    upsert_captcha_log(site_key, "PASS", risk_score, client_ip, vpn_detected, telemetry)
+    log_captcha_event(app, site_key, "PASS", risk_score, client_ip, vpn_detected, telemetry)
 
     timestamp = str(int(time.time()))
     message = f"{site_key}:{timestamp}:{risk_score}".encode('utf-8')
@@ -1374,7 +1434,7 @@ def audio_challenge():
 
         client_ip = get_client_ip()
         try:
-            upsert_captcha_log(site_key, "CHALLENGE", 0.5, client_ip, check_ip_vpn(client_ip))
+            log_captcha_event(app, site_key, "CHALLENGE", 0.5, client_ip, check_ip_vpn(client_ip, sync=False))
         except Exception as log_err:
             import logging
             logging.warning(f"[CAPTCHA] Log upsert error: {log_err}")
@@ -1463,13 +1523,17 @@ def visual_verify():
 
         expires = datetime.utcfromtimestamp(timestamp) + timedelta(seconds=300)
         db.session.add(ConsumedCaptchaToken(signature=ticket_id, expires_at=expires))
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
             
     except Exception as ex:
         app.total_failures = (app.total_failures or 0) + 1
         if not getattr(app, 'is_test', False):
             db.session.add(app)
         client_ip = get_client_ip()
-        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))
+        log_captcha_event(app, site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip, sync=False))
         return jsonify({"success": False, "error": "Invalid ticket"}), 400
         
     # Validation logic based on challenge type
@@ -1500,7 +1564,7 @@ def visual_verify():
         if not getattr(app, 'is_test', False):
             db.session.add(app)
         client_ip = get_client_ip()
-        upsert_captcha_log(site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip))
+        log_captcha_event(app, site_key, "FAIL", 1.0, client_ip, check_ip_vpn(client_ip, sync=False))
         return jsonify({"success": False, "error": "Incorrect answer"}), 400
         
     risk_score = 0.35
@@ -1510,7 +1574,7 @@ def visual_verify():
     
     token = f"{site_key}~{timestamp}~{risk_score}.{signature}"
     client_ip = get_client_ip()
-    upsert_captcha_log(site_key, "PASS", risk_score, client_ip, check_ip_vpn(client_ip))
+    log_captcha_event(app, site_key, "PASS", risk_score, client_ip, check_ip_vpn(client_ip, sync=False))
     
     return jsonify({
         "success": True,
