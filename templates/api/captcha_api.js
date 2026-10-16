@@ -13,6 +13,42 @@
         }
     }
 
+    // Warm up network connection to backend via preconnect
+    try {
+        if (document.head && !document.querySelector(`link[rel="preconnect"][href="${HOST}"]`)) {
+            const pc = document.createElement('link');
+            pc.rel = 'preconnect';
+            pc.href = HOST;
+            pc.crossOrigin = 'anonymous';
+            document.head.appendChild(pc);
+        }
+    } catch (_) {}
+
+    // In-memory and sessionStorage fast settings cache for instant render (0.0 ms)
+    const _settingsMemCache = new Map();
+    function getStoredSettings(sk) {
+        if (!sk) return null;
+        if (_settingsMemCache.has(sk)) return _settingsMemCache.get(sk);
+        try {
+            const stored = sessionStorage.getItem('argus_s_' + sk);
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                if (Date.now() - parsed.ts < 300000) { // 5 min TTL
+                    _settingsMemCache.set(sk, parsed.data);
+                    return parsed.data;
+                }
+            }
+        } catch (_) {}
+        return null;
+    }
+    function setStoredSettings(sk, data) {
+        if (!sk || !data) return;
+        _settingsMemCache.set(sk, data);
+        try {
+            sessionStorage.setItem('argus_s_' + sk, JSON.stringify({ data: data, ts: Date.now() }));
+        } catch (_) {}
+    }
+
     // =========================================================================
     // ARGUS SHIELD: Multi-Layer Anti-Tamper, Anti-Hooking & Prototype Integrity
     // =========================================================================
@@ -190,7 +226,7 @@
     // =========================================================================
     const ArgusVM = (function () {
         // Polymorphic Opcode Seed (randomized per build)
-        const _VM_SEED = 0x10;
+        const _VM_SEED = 0x0C;
 
         // Base opcode mnemonics
         const _OP_BASE = [
@@ -945,8 +981,8 @@
                 submitButtons = parentForm.querySelectorAll('button[type="submit"], input[type="submit"]');
             }
 
-            let mode = 'manual';
-            let theme = 'auto';
+            let mode = container.dataset.mode || 'manual';
+            let theme = container.dataset.theme || 'auto';
             let initialError = null;
             let isTestMode = false;
             let powDifficulty = 4;
@@ -955,22 +991,32 @@
                 initialError = "Missing sitekey";
             } else if (sitekey === 'argus_simulate_network_error') {
                 initialError = "Network Error";
-            } else {
+            }
+
+            // Check client-side instant cache (0.0 ms render)
+            const cachedSettings = sitekey ? getStoredSettings(sitekey) : null;
+            if (cachedSettings && cachedSettings.success) {
+                mode = cachedSettings.mode || mode;
+                if (cachedSettings.theme && cachedSettings.theme !== 'auto') theme = cachedSettings.theme;
+                isTestMode = cachedSettings.is_test || false;
+                powDifficulty = cachedSettings.pow_difficulty || (cachedSettings.pow_prefix ? cachedSettings.pow_prefix.length : 4);
+            }
+
+            // Asynchronous non-blocking settings promise (never blocks visual mounting)
+            const settingsPromise = (async () => {
+                if (initialError) return { success: false, error: initialError };
+                if (cachedSettings) return cachedSettings;
                 try {
                     const res = await fetch(`${HOST}/v1/captcha/settings?sitekey=${encodeURIComponent(sitekey)}`);
                     const data = await res.json();
-                    if (!data.success) {
-                        initialError = data.error || 'Failed to load settings';
-                    } else {
-                        mode = data.mode || 'manual';
-                        theme = data.theme || 'auto';
-                        isTestMode = data.is_test || false;
-                        powDifficulty = data.pow_difficulty || (data.pow_prefix ? data.pow_prefix.length : 4);
+                    if (data && data.success) {
+                        setStoredSettings(sitekey, data);
                     }
+                    return data;
                 } catch (err) {
-                    initialError = "Network Error";
+                    return { success: false, error: "Network Error" };
                 }
-            }
+            })();
 
             // Shadow DOM encapsulation for maximum stealth from external scrapers
             let mountPoint = container;
@@ -1946,9 +1992,31 @@
                 triggerError(initialError, true);
             }
 
+            settingsPromise.then(data => {
+                if (!data || !data.success) {
+                    triggerError((data && data.error) || 'Failed to load settings', true);
+                } else {
+                    mode = data.mode || mode;
+                    isTestMode = data.is_test || false;
+                    powDifficulty = data.pow_difficulty || (data.pow_prefix ? data.pow_prefix.length : 4);
+                    if (mode === 'invisible') {
+                        widget.style.display = 'none';
+                    } else if (mode === 'auto' && !isVerified && !isProcessing) {
+                        executeChallenge();
+                    }
+                }
+            });
+
             const executeChallenge = async () => {
                 if (isVerified || container.dataset.verified === "true") return;
                 if (isProcessing || isFailed) return; // prevent spamming clicks
+
+                // Ensure settings have completed before proceeding with challenge
+                const settingsData = await settingsPromise;
+                if (!settingsData || !settingsData.success) {
+                    triggerError((settingsData && settingsData.error) || 'Failed to load settings', true);
+                    return;
+                }
 
                 currentVisualData = null;
                 currentAudioData = null;
