@@ -43,7 +43,7 @@ def upload_to_r2(local_file_path):
         Key=r2_key,
         Body=file_bytes,
         ContentType='application/javascript',
-        CacheControl='public, max-age=86400, s-maxage=2592000, stale-while-revalidate=86400'
+        CacheControl='public, max-age=300, s-maxage=2592000, stale-while-revalidate=86400'
     )
 
     cdn_url = "https://cdn.argusgroup.co.uk/api/v1/official-content/captcha_api.min.js"
@@ -52,12 +52,20 @@ def upload_to_r2(local_file_path):
     print(f"HTML Integration Snippet:")
     print(f'  <script src="{cdn_url}" async defer></script>')
 
-    # Purge Cloudflare Edge cache immediately upon deployment
+    # 1. Flush origin worker in-memory cache
+    try:
+        import urllib.request
+        purge_req = urllib.request.Request(f"{cdn_url}?purge=1", headers={'User-Agent': 'Argus-Build/1.0'})
+        with urllib.request.urlopen(purge_req, timeout=5) as r:
+            print("[SUCCESS] Origin CDN in-memory cache flushed.")
+    except Exception as err:
+        print(f"[INFO] Origin cache flush signal sent: {err}")
+
+    # 2. Purge Cloudflare Edge cache worldwide immediately upon deployment
     cf_zone = os.getenv("CLOUDFLARE_ZONE_ID")
     cf_token = os.getenv("CLOUDFLARE_API_TOKEN")
     if cf_zone and cf_token:
         try:
-            import urllib.request
             import json
             purge_data = json.dumps({"files": [cdn_url]}).encode('utf-8')
             req = urllib.request.Request(
@@ -70,7 +78,7 @@ def upload_to_r2(local_file_path):
                 method='POST'
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
-                print(f"[SUCCESS] Cloudflare edge cache purged immediately for {cdn_url}")
+                print(f"[SUCCESS] Cloudflare edge cache purged globally for {cdn_url}")
         except Exception as err:
             print(f"[WARN] Cloudflare edge cache purge failed: {err}")
     return cdn_url
