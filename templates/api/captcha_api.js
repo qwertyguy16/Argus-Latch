@@ -190,7 +190,7 @@
     // =========================================================================
     const ArgusVM = (function () {
         // Polymorphic Opcode Seed (randomized per build)
-        const _VM_SEED = 0x4C;
+        const _VM_SEED = 0x0B;
 
         // Base opcode mnemonics
         const _OP_BASE = [
@@ -1492,20 +1492,19 @@
                 if (document.body.contains(visualOverlay)) {
                     visualOverlay.remove();
                 }
+                if (isVerified || container.dataset.verified === "true") return;
                 isProcessing = false;
                 isFailed = false;
                 spinner.style.display = 'none';
                 crossmark.style.display = 'none';
                 checkmark.style.display = 'none';
                 exclamation.style.display = 'none';
-                if (!isVerified) {
-                    box.style.display = 'block';
-                    box.style.borderColor = colors.boxBorder;
-                    text.innerText = "I'm not a robot";
-                    text.style.color = colors.text;
-                    subText.style.display = 'none';
-                    widget.style.borderColor = colors.border;
-                }
+                box.style.display = 'block';
+                box.style.borderColor = colors.boxBorder;
+                text.innerText = "Verify you are human";
+                text.style.color = colors.text;
+                subText.style.display = 'none';
+                widget.style.borderColor = colors.border;
             };
 
             const createHeaderIconBtn = (svgHtml, title, onClick) => {
@@ -1695,52 +1694,82 @@
 
             const injectToken = (token) => {
                 isVerified = true;
+                container.dataset.verified = "true";
+                isProcessing = false;
+                isFailed = false;
+
                 if (document.body.contains(visualOverlay)) {
                     visualOverlay.remove();
                 }
                 spinner.style.display = 'none';
+                crossmark.style.display = 'none';
                 box.style.display = 'none';
+                exclamation.style.display = 'none';
+
                 checkmark.style.display = 'block';
                 checkmark.style.animation = 'none';
                 void checkmark.offsetWidth;
                 checkmark.style.animation = `${kfPopIn} 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards`;
 
                 const polyline = checkmark.querySelector('polyline');
-                polyline.style.animation = 'none';
-                void polyline.offsetWidth;
-                polyline.style.animation = `${kfDraw} 0.4s ease 0.2s both`;
+                if (polyline) {
+                    polyline.style.animation = 'none';
+                    void polyline.offsetWidth;
+                    polyline.style.animation = `${kfDraw} 0.4s ease 0.2s both`;
+                }
 
                 text.innerText = "Success!";
                 text.style.color = '#10b981';
+                text.style.cursor = 'default';
                 subText.style.display = 'none';
 
                 widget.style.borderColor = '#10b981';
                 widget.style.boxShadow = '0 0 0 1px rgba(16, 185, 129, 0.2)';
+                widget.style.cursor = 'default';
 
-                container.dispatchEvent(new CustomEvent('argus-captcha-verified', { bubbles: true, composed: true, detail: { token } }));
+                checkboxContainer.style.cursor = 'default';
+                checkboxContainer.style.pointerEvents = 'none';
+                checkboxContainer.setAttribute('aria-checked', 'true');
+                checkboxContainer.removeAttribute('tabindex');
 
-
-
-                let form = container.closest('form');
-                if (form) {
-                    let input = form.querySelector('input[name="argus-captcha-response"]');
-                    if (!input) {
-                        input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = 'argus-captcha-response';
-                        form.appendChild(input);
-                    }
-                    input.value = token;
-                    if (mode === 'invisible') {
-                        HTMLFormElement.prototype.submit.call(form);
-                    }
+                // Detach click listener so clicking the tick does not re-execute
+                checkboxContainer.removeEventListener('click', executeChallenge);
+                if (typeof text !== 'undefined' && text) {
+                    text.removeEventListener('click', executeChallenge);
+                    text.style.cursor = 'default';
                 }
 
-                const cbName = container.dataset.callback;
-                if (cbName && typeof window[cbName] === 'function') {
-                    window[cbName](token);
-                }
-                container.dispatchEvent(new CustomEvent('argus-success', { detail: { token: token } }));
+                try {
+                    container.dispatchEvent(new CustomEvent('argus-captcha-verified', { bubbles: true, composed: true, detail: { token } }));
+                } catch (_) {}
+
+                try {
+                    let form = container.closest('form');
+                    if (form) {
+                        let input = form.querySelector('input[name="argus-captcha-response"]');
+                        if (!input) {
+                            input = document.createElement('input');
+                            input.type = 'hidden';
+                            input.name = 'argus-captcha-response';
+                            form.appendChild(input);
+                        }
+                        input.value = token;
+                        if (mode === 'invisible') {
+                            HTMLFormElement.prototype.submit.call(form);
+                        }
+                    }
+                } catch (_) {}
+
+                try {
+                    const cbName = container.dataset.callback;
+                    if (cbName && typeof window[cbName] === 'function') {
+                        window[cbName](token);
+                    }
+                } catch (_) {}
+
+                try {
+                    container.dispatchEvent(new CustomEvent('argus-success', { detail: { token: token } }));
+                } catch (_) {}
             };
 
             const getPresetErrorDescription = (errMsg) => {
@@ -1778,6 +1807,7 @@
             };
 
             const triggerError = (msg, isFatal = false) => {
+                if (isVerified || container.dataset.verified === "true") return;
                 const desc = getPresetErrorDescription(msg);
                 isProcessing = false;
                 isFailed = true;
@@ -1908,7 +1938,7 @@
             }
 
             const executeChallenge = async () => {
-                if (container.dataset.verified === "true") return;
+                if (isVerified || container.dataset.verified === "true") return;
                 if (isProcessing || isFailed) return; // prevent spamming clicks
 
                 isProcessing = true;
@@ -1997,6 +2027,7 @@
 
                     if (data.success && data.token) {
                         injectToken(data.token);
+                        return;
                     }
                     else if (data.requires_visual) {
                         isProcessing = false;
@@ -2333,8 +2364,8 @@
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
                                         if (audioObj) audioObj.pause();
-                                        closeModal();
                                         injectToken(visData.token);
+                                        closeModal();
                                     } else {
                                         if (audioObj) audioObj.pause();
                                         closeModal();
@@ -2441,8 +2472,8 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        closeModal();
                                         injectToken(visData.token);
+                                        closeModal();
                                     } else {
                                         closeModal();
                                         triggerError('Validation failed', false);
@@ -2692,8 +2723,8 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        closeModal();
                                         injectToken(visData.token);
+                                        closeModal();
                                     } else {
                                         closeModal();
                                         triggerError('Validation failed', false);
@@ -2744,8 +2775,8 @@
                                     });
                                     const visData = await vRes.json();
                                     if (visData.success && visData.token) {
-                                        closeModal();
                                         injectToken(visData.token);
+                                        closeModal();
                                     } else {
                                         closeModal();
                                         triggerError('Validation failed', false);
@@ -2773,6 +2804,7 @@
                         };
                     }
                 } catch (err) {
+                    if (isVerified || container.dataset.verified === "true") return;
                     const isFatal = err.fatal === true || !navigator.onLine || err.name === 'TypeError' || (err.message && err.message.toLowerCase().includes('network'));
                     triggerError(err.message || 'Verification error', isFatal);
                 }
@@ -2783,6 +2815,7 @@
 
             if (mode === 'manual') {
                 checkboxContainer.addEventListener('click', executeChallenge);
+                text.addEventListener('click', executeChallenge);
                 if (form) {
                     form.addEventListener('submit', (e) => {
                         if (!isVerified) {

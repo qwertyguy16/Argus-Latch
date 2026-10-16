@@ -366,7 +366,6 @@ def generate_audio_challenge():
     import wave
     import random
     import base64
-    import numpy as np
     from flask import current_app
 
     # 4 to 6 random digits
@@ -377,101 +376,158 @@ def generate_audio_challenge():
     samples_dir = os.path.join(current_app.root_path, 'audio_samples')
     rate = 22050
 
-    combined = []
-    # Initial pause
-    combined.append(np.zeros(int(rate * random.uniform(0.2, 0.35)), dtype=np.int16))
-
-    for i, d in enumerate(digits):
-        path = os.path.join(samples_dir, f'digit_{d}.wav')
-        if os.path.exists(path):
-            with wave.open(path, 'rb') as w:
-                data = w.readframes(w.getnframes())
-                arr = np.frombuffer(data, dtype=np.int16).copy()
-
-                # Micro-jitter: slight speed/duration variation (0.93 - 1.07)
-                resample_ratio = random.uniform(0.93, 1.07)
-                new_len = int(len(arr) * resample_ratio)
-                indices = np.linspace(0, len(arr) - 1, new_len)
-                arr = np.interp(indices, np.arange(len(arr)), arr).astype(np.float32)
-
-                # Individual digit volume variation (0.80 - 1.15)
-                vol_gain = random.uniform(0.80, 1.15)
-                arr = np.clip(arr * vol_gain, -32767, 32767).astype(np.int16)
-                combined.append(arr)
-        else:
-            freq = 400 + d * 80
-            dur = random.uniform(0.35, 0.45)
-            t = np.linspace(0, dur, int(rate * dur), endpoint=False)
-            tone = (16000 * np.sin(2 * np.pi * freq * t)).astype(np.int16)
-            combined.append(tone)
-
-        # Varied pause between digits (0.22s to 0.42s)
-        if i < len(digits) - 1:
-            pause_frames = int(rate * random.uniform(0.22, 0.42))
-            combined.append(np.zeros(pause_frames, dtype=np.int16))
-
-    # Trailing pause
-    combined.append(np.zeros(int(rate * random.uniform(0.25, 0.4)), dtype=np.int16))
-    full_audio = np.concatenate(combined).astype(np.float32)
-
-    total_len = len(full_audio)
-    t = np.arange(total_len) / rate
-
-    # 1. Multi-layered Acoustic Static / Radio Noise (challenging for Whisper/ASR)
-    # White noise (RF static / atmospheric hiss):
-    white_noise = np.random.normal(0, 2800, total_len).astype(np.float32)
-    # Moving average for pink/brown low-pass rumble (chassis/ambient room rumble):
-    kernel_size = 11
-    kernel = np.ones(kernel_size) / kernel_size
-    brown_rumble = np.convolve(np.random.normal(0, 3600, total_len + kernel_size - 1), kernel, mode='valid')
-
-    # 2. Power Line Hum & Harmonics (60Hz, 120Hz, 180Hz)
-    hum = (
-        1200 * np.sin(2 * np.pi * 60 * t) +
-        600 * np.sin(2 * np.pi * 120 * t + 0.4) +
-        300 * np.sin(2 * np.pi * 180 * t + 0.8)
-    )
-
-    # 3. Dynamic FM Sweep / Acoustic Warble (interferes with Mel filterbanks)
-    sweep_rate = random.uniform(0.3, 0.6)
-    fm_center = random.uniform(340, 460)
-    sweep = 1100 * np.sin(2 * np.pi * (fm_center + 70 * np.sin(2 * np.pi * sweep_rate * t)) * t)
-
-    # 4. Vinyl crackle / acoustic pops (sporadic impulse interference)
-    crackles = np.zeros(total_len, dtype=np.float32)
-    num_pops = random.randint(40, 70)
-    pop_indices = np.random.randint(0, total_len, size=num_pops)
-    pop_amps = np.random.uniform(7000, 14000, size=num_pops) * np.random.choice([-1, 1], size=num_pops)
-    crackles[pop_indices] = pop_amps
-
-    # 5. Background Voice Murmur (cocktail party defense)
     try:
-        murmur_samples = []
-        for _ in range(3):
-            rnd_d = random.randint(0, 9)
-            m_path = os.path.join(samples_dir, f'digit_{rnd_d}.wav')
-            if os.path.exists(m_path):
-                with wave.open(m_path, 'rb') as mw:
-                    m_data = mw.readframes(mw.getnframes())
-                    m_arr = np.frombuffer(m_data, dtype=np.int16)[::-1].astype(np.float32) * 0.22
-                    murmur_samples.append(m_arr)
-        if murmur_samples:
-            murmur_full = np.tile(np.concatenate(murmur_samples), int(np.ceil(total_len / sum(len(x) for x in murmur_samples)) + 1))[:total_len]
-        else:
-            murmur_full = np.zeros(total_len, dtype=np.float32)
-    except Exception:
-        murmur_full = np.zeros(total_len, dtype=np.float32)
+        import numpy as np
+        has_numpy = True
+    except ImportError:
+        has_numpy = False
 
-    # Mix speech signal with composite noise defenses
-    mixed = full_audio + white_noise + brown_rumble + hum + sweep + crackles + murmur_full
-    final_pcm = np.clip(mixed, -32767, 32767).astype(np.int16)
+    if has_numpy:
+        combined = []
+        # Initial pause
+        combined.append(np.zeros(int(rate * random.uniform(0.2, 0.35)), dtype=np.int16))
+
+        for i, d in enumerate(digits):
+            path = os.path.join(samples_dir, f'digit_{d}.wav')
+            if os.path.exists(path):
+                with wave.open(path, 'rb') as w:
+                    data = w.readframes(w.getnframes())
+                    arr = np.frombuffer(data, dtype=np.int16).copy()
+
+                    # Micro-jitter: slight speed/duration variation (0.93 - 1.07)
+                    resample_ratio = random.uniform(0.93, 1.07)
+                    new_len = int(len(arr) * resample_ratio)
+                    indices = np.linspace(0, len(arr) - 1, new_len)
+                    arr = np.interp(indices, np.arange(len(arr)), arr).astype(np.float32)
+
+                    # Individual digit volume variation (0.80 - 1.15)
+                    vol_gain = random.uniform(0.80, 1.15)
+                    arr = np.clip(arr * vol_gain, -32767, 32767).astype(np.int16)
+                    combined.append(arr)
+            else:
+                freq = 400 + d * 80
+                dur = random.uniform(0.35, 0.45)
+                t = np.linspace(0, dur, int(rate * dur), endpoint=False)
+                tone = (16000 * np.sin(2 * np.pi * freq * t)).astype(np.int16)
+                combined.append(tone)
+
+            # Varied pause between digits (0.22s to 0.42s)
+            if i < len(digits) - 1:
+                pause_frames = int(rate * random.uniform(0.22, 0.42))
+                combined.append(np.zeros(pause_frames, dtype=np.int16))
+
+        # Trailing pause
+        combined.append(np.zeros(int(rate * random.uniform(0.25, 0.4)), dtype=np.int16))
+        full_audio = np.concatenate(combined).astype(np.float32)
+
+        total_len = len(full_audio)
+        t = np.arange(total_len) / rate
+
+        # 1. Multi-layered Acoustic Static / Radio Noise (challenging for Whisper/ASR)
+        white_noise = np.random.normal(0, 2800, total_len).astype(np.float32)
+        kernel_size = 11
+        kernel = np.ones(kernel_size) / kernel_size
+        brown_rumble = np.convolve(np.random.normal(0, 3600, total_len + kernel_size - 1), kernel, mode='valid')
+
+        # 2. Power Line Hum & Harmonics (60Hz, 120Hz, 180Hz)
+        hum = (
+            1200 * np.sin(2 * np.pi * 60 * t) +
+            600 * np.sin(2 * np.pi * 120 * t + 0.4) +
+            300 * np.sin(2 * np.pi * 180 * t + 0.8)
+        )
+
+        # 3. Dynamic FM Sweep / Acoustic Warble (interferes with Mel filterbanks)
+        sweep_rate = random.uniform(0.3, 0.6)
+        fm_center = random.uniform(340, 460)
+        sweep = 1100 * np.sin(2 * np.pi * (fm_center + 70 * np.sin(2 * np.pi * sweep_rate * t)) * t)
+
+        # 4. Vinyl crackle / acoustic pops (sporadic impulse interference)
+        crackles = np.zeros(total_len, dtype=np.float32)
+        num_pops = random.randint(40, 70)
+        pop_indices = np.random.randint(0, total_len, size=num_pops)
+        pop_amps = np.random.uniform(7000, 14000, size=num_pops) * np.random.choice([-1, 1], size=num_pops)
+        crackles[pop_indices] = pop_amps
+
+        # 5. Background Voice Murmur (cocktail party defense)
+        try:
+            murmur_samples = []
+            for _ in range(3):
+                rnd_d = random.randint(0, 9)
+                m_path = os.path.join(samples_dir, f'digit_{rnd_d}.wav')
+                if os.path.exists(m_path):
+                    with wave.open(m_path, 'rb') as mw:
+                        m_data = mw.readframes(mw.getnframes())
+                        m_arr = np.frombuffer(m_data, dtype=np.int16)[::-1].astype(np.float32) * 0.22
+                        murmur_samples.append(m_arr)
+            if murmur_samples:
+                murmur_full = np.tile(np.concatenate(murmur_samples), int(np.ceil(total_len / sum(len(x) for x in murmur_samples)) + 1))[:total_len]
+            else:
+                murmur_full = np.zeros(total_len, dtype=np.float32)
+        except Exception:
+            murmur_full = np.zeros(total_len, dtype=np.float32)
+
+        # Mix speech signal with composite noise defenses
+        mixed = full_audio + white_noise + brown_rumble + hum + sweep + crackles + murmur_full
+        final_pcm = np.clip(mixed, -32767, 32767).astype(np.int16)
+        pcm_bytes = final_pcm.tobytes()
+    else:
+        # Zero-dependency standard library fallback (works on any Python environment without numpy)
+        import math
+        from array import array
+
+        audio_samples = array('h')
+        initial_pause = int(rate * random.uniform(0.2, 0.35))
+        audio_samples.extend([0] * initial_pause)
+
+        for i, d in enumerate(digits):
+            path = os.path.join(samples_dir, f'digit_{d}.wav')
+            if os.path.exists(path):
+                with wave.open(path, 'rb') as w:
+                    data = w.readframes(w.getnframes())
+                    d_arr = array('h')
+                    d_arr.frombytes(data)
+                    vol = random.uniform(0.85, 1.15)
+                    for s in d_arr:
+                        v = int(s * vol)
+                        if v > 32767: v = 32767
+                        elif v < -32767: v = -32767
+                        audio_samples.append(v)
+            else:
+                freq = 400 + d * 80
+                dur = random.uniform(0.35, 0.45)
+                for s_idx in range(int(rate * dur)):
+                    val = int(16000 * math.sin(2 * math.pi * freq * (s_idx / rate)))
+                    audio_samples.append(val)
+            if i < len(digits) - 1:
+                audio_samples.extend([0] * int(rate * random.uniform(0.22, 0.42)))
+
+        audio_samples.extend([0] * int(rate * random.uniform(0.25, 0.4)))
+
+        final_pcm = array('h')
+        sweep_rate = random.uniform(0.3, 0.6)
+        fm_center = random.uniform(340, 460)
+
+        for idx, s in enumerate(audio_samples):
+            t_sec = idx / rate
+            static = int(random.gauss(0, 2000))
+            hum = int(1000 * math.sin(2 * math.pi * 60 * t_sec) + 400 * math.sin(2 * math.pi * 120 * t_sec))
+            sweep = int(800 * math.sin(2 * math.pi * (fm_center + 60 * math.sin(2 * math.pi * sweep_rate * t_sec)) * t_sec))
+            pop = 0
+            if random.random() < 0.0015:
+                pop = random.choice([-1, 1]) * random.randint(5000, 10000)
+
+            mixed = int(s + static + hum + sweep + pop)
+            if mixed > 32767: mixed = 32767
+            elif mixed < -32767: mixed = -32767
+            final_pcm.append(mixed)
+        pcm_bytes = final_pcm.tobytes()
 
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as out_w:
         out_w.setnchannels(1)
         out_w.setsampwidth(2)
         out_w.setframerate(rate)
-        out_w.writeframes(final_pcm.tobytes())
+        out_w.writeframes(pcm_bytes)
 
     audio_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     return digits_str, audio_b64
