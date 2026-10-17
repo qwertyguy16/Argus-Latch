@@ -63,7 +63,7 @@
         const _createElement = Document.prototype.createElement;
         const _addEventListener = EventTarget.prototype.addEventListener;
 
-        const NATIVE_CODE_REGEX = /^function\s*([a-zA-Z0-9_$]+)?\s*\([^)]*\)\s*\{\s*\[native code\]\s*\}$/;
+        const NATIVE_CODE_REGEX = /^(?:function\s*)?(?:(?:get|set)\s+)?[a-zA-Z0-9_$]*\s*\([^)]*\)\s*\{\s*\[native code\]\s*\}$/;
 
         function isNativeFunction(fn) {
             if (!fn || typeof fn !== 'function') return false;
@@ -71,7 +71,7 @@
                 if (_Object_hasOwnProperty.call(fn, 'toString')) {
                     return false;
                 }
-                const fnStr = _Function_toString.call(fn);
+                const fnStr = _Function_toString.call(fn).trim();
                 if (!NATIVE_CODE_REGEX.test(fnStr)) {
                     return false;
                 }
@@ -96,7 +96,7 @@
                         return true;
                     }
                 }
-                const selfStr = _Function_toString.call(_Function_toString);
+                const selfStr = _Function_toString.call(_Function_toString).trim();
                 if (!NATIVE_CODE_REGEX.test(selfStr)) {
                     return true;
                 }
@@ -150,7 +150,7 @@
                     const desc = _Object_getOwnPropertyDescriptor(nav, 'webdriver') ||
                                  _Object_getOwnPropertyDescriptor(Object.getPrototypeOf(nav), 'webdriver');
                     if (desc && desc.get) {
-                        const getterStr = _Function_toString.call(desc.get);
+                        const getterStr = _Function_toString.call(desc.get).trim();
                         if (!NATIVE_CODE_REGEX.test(getterStr)) {
                             hookingDetected = true;
                             tamperedAPIs.push('navigator.webdriver_getter_hook');
@@ -226,7 +226,7 @@
     // =========================================================================
     const ArgusVM = (function () {
         // Polymorphic Opcode Seed (randomized per build)
-        const _VM_SEED = 0x24;
+        const _VM_SEED = 0x6B;
 
         // Base opcode mnemonics
         const _OP_BASE = [
@@ -594,6 +594,7 @@
         screenRes: "",
         typingCadence: [],
         touchPressures: [],
+        touchCount: 0,
         canvasFingerprint: "",
         webglRenderer: "",
         hardwareConcurrency: navigator.hardwareConcurrency || 0,
@@ -794,9 +795,9 @@
                         const renderer = (gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '').toLowerCase();
                         const vendor = (gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || '').toLowerCase();
                         if (renderer.includes('swiftshader') || renderer.includes('llvmpipe') ||
-                            renderer.includes('softpipe') || renderer.includes('mesa') ||
+                            renderer.includes('softpipe') || renderer.includes('swrast') ||
                             renderer.includes('virtualbox') || renderer.includes('vmware') ||
-                            vendor.includes('mesa') || renderer.includes('software rasterizer')) {
+                            renderer.includes('software rasterizer')) {
                             reasons.push('software_rasterizer_detected:' + renderer);
                             isStealth = true;
                         }
@@ -882,8 +883,12 @@
         lastKeyTime = now;
     }, { passive: true });
 
-    // Touch pressure
+    // Touch tracking
+    document.addEventListener('touchstart', function () {
+        telemetryData.touchCount = (telemetryData.touchCount || 0) + 1;
+    }, { passive: true });
     document.addEventListener('touchmove', function (e) {
+        telemetryData.touchCount = (telemetryData.touchCount || 0) + 1;
         if (e.touches && e.touches.length > 0 && e.touches[0].force !== undefined) {
             if (telemetryData.touchPressures.length < 20) {
                 telemetryData.touchPressures.push(e.touches[0].force);
@@ -941,8 +946,11 @@
     }
 
     function analyzeMouseBehavior() {
-        if (telemetryData.mouseEvents === 0) return 100;
-        if (telemetryData.mouseTrajectory.length < 3) return 80;
+        if ((telemetryData.touchCount && telemetryData.touchCount > 0) || (telemetryData.touchPressures && telemetryData.touchPressures.length > 0)) {
+            return 0;
+        }
+        if (telemetryData.mouseEvents === 0) return 60;
+        if (telemetryData.mouseTrajectory.length < 3) return 40;
 
         let straightLines = 0;
         for (let i = 2; i < telemetryData.mouseTrajectory.length; i++) {
@@ -2381,6 +2389,7 @@
                         screenRes: telemetryData.screenRes,
                         typingCadence: telemetryData.typingCadence,
                         touchPressures: telemetryData.touchPressures,
+                        touchCount: telemetryData.touchCount || 0,
                         canvasFingerprint: telemetryData.canvasFingerprint,
                         webglRenderer: telemetryData.webglRenderer,
                         hardwareConcurrency: telemetryData.hardwareConcurrency,

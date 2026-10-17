@@ -1052,20 +1052,23 @@ def challenge():
     if telemetry.get('forceVisual'):
         risk_score += 0.4
         
-    # Time-to-solve check (if less than 300ms, extremely suspicious)
+    # Time-to-solve check (if less than 300ms, suspicious, prompts challenge without instant-banning fast users)
     time_on_page = telemetry.get('timeOnPage', 0)
     if time_on_page < 300:
-        risk_score += 0.8
+        risk_score += 0.35
     elif time_on_page < 1000:
-        risk_score += 0.3
+        risk_score += 0.15
         
-    # WebGL Fingerprint analysis
+    # WebGL Fingerprint analysis (software rasterizers only; legitimate Mesa drivers on Linux are preserved)
     webgl = telemetry.get('webglRenderer', '').lower()
-    if 'swiftshader' in webgl or 'llvmpipe' in webgl or 'mesa' in webgl or webgl == '':
+    if 'swiftshader' in webgl or 'llvmpipe' in webgl or 'softpipe' in webgl or 'swrast' in webgl or 'software rasterizer' in webgl or webgl == '':
         risk_score += 0.4
     
+    # Mouse behavior (skip mouse penalty for mobile / touch-enabled devices)
+    has_touch = bool(telemetry.get('touchCount') or telemetry.get('touchPressures'))
     mouse_score = telemetry.get('mouseScore', 0)
-    risk_score += min(0.3, mouse_score / 300.0)
+    if not has_touch:
+        risk_score += min(0.3, mouse_score / 300.0)
     
     canvas_fp = telemetry.get('canvasFingerprint', '')
     if not canvas_fp or len(canvas_fp) < 20:
@@ -1089,7 +1092,7 @@ def challenge():
         risk_score += 0.2
         
     device_memory = telemetry.get('deviceMemory', 0)
-    if device_memory == 0 or device_memory > 256:
+    if device_memory > 256 or device_memory < 0:
         risk_score += 0.2
         
     audio_fingerprint = telemetry.get('audioFingerprint', '')
